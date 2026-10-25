@@ -74,19 +74,28 @@ public struct ProjectRow: Identifiable, Hashable, Sendable {
     public let workspace: Workspace
     public let details: ProjectDetails?
     public let git: GitStatus?
-    /// The iOS app, when the project has one.
+    /// The iOS app built by Lovable, when the project has one.
     public let ios: IOSStatus?
+    /// The apps in the Blender Dev Apps catalog that build from this project's repo.
+    public let hub: [HubApp]
     /// Why the details couldn't be read, if they couldn't.
     public let error: String?
 
-    public init(summary: ProjectSummary, workspace: Workspace, details: ProjectDetails?, git: GitStatus? = nil, ios: IOSStatus? = nil, error: String? = nil) {
+    public init(summary: ProjectSummary, workspace: Workspace, details: ProjectDetails?, git: GitStatus? = nil, ios: IOSStatus? = nil, hub: [HubApp] = [], error: String? = nil) {
         self.summary = summary
         self.workspace = workspace
         self.details = details
         self.git = git
         self.ios = ios
+        self.hub = hub
         self.error = error
     }
+
+    /// Has an iOS app, on Lovable or in the catalog.
+    public var hasIOS: Bool { ios != nil || !hub.isEmpty }
+
+    /// Some iOS build is behind the code.
+    public var iosNeedsBuild: Bool { ios?.testFlightNeedsUpload == true || hub.contains(where: \.needsTestFlight) }
 
     public var id: String { summary.id }
     public var state: DeployState { DeployState.evaluate(details, listedAsPublished: summary.isPublished) }
@@ -94,15 +103,19 @@ public struct ProjectRow: Identifiable, Hashable, Sendable {
     public var liveURL: String? { details?.url }
 
     public func with(details: ProjectDetails?) -> ProjectRow {
-        ProjectRow(summary: summary, workspace: workspace, details: details, git: git, ios: ios, error: nil)
+        ProjectRow(summary: summary, workspace: workspace, details: details, git: git, ios: ios, hub: hub, error: nil)
     }
 
     public func with(git: GitStatus?) -> ProjectRow {
-        ProjectRow(summary: summary, workspace: workspace, details: details, git: git, ios: ios, error: error)
+        ProjectRow(summary: summary, workspace: workspace, details: details, git: git, ios: ios, hub: hub, error: error)
     }
 
     public func with(ios: IOSStatus?) -> ProjectRow {
-        ProjectRow(summary: summary, workspace: workspace, details: details, git: git, ios: ios, error: error)
+        ProjectRow(summary: summary, workspace: workspace, details: details, git: git, ios: ios, hub: hub, error: error)
+    }
+
+    public func with(hub: [HubApp]) -> ProjectRow {
+        ProjectRow(summary: summary, workspace: workspace, details: details, git: git, ios: ios, hub: hub, error: error)
     }
 }
 

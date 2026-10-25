@@ -148,7 +148,8 @@ struct MenuView: View {
                 Text("Todo lo publicado está al día.")
             } else if model.filter == .ios {
                 Image(systemName: "iphone.slash").font(.title)
-                Text("Ningún proyecto tiene app de iOS en Lovable.")
+                Text(model.hasHub ? "Ningún proyecto tiene app de iOS." : "Ningún proyecto tiene app de iOS en Lovable. Conecta Blender Dev Apps en Ajustes para ver las de Xcode Cloud.")
+                    .multilineTextAlignment(.center)
             } else {
                 Text("No hay proyectos.")
             }
@@ -179,15 +180,15 @@ struct MenuView: View {
             Spacer()
             if model.filter == .ios {
                 Button {
-                    model.uploadOutdatedToMac()
+                    model.requestTestFlight(model.testFlightCandidates)
                 } label: {
-                    Label(macTitle, systemImage: "airplane")
+                    Label(testFlightTitle, systemImage: "airplane")
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(model.macUploadCandidates.isEmpty)
-                .help(model.hasGitHub
-                    ? "Manda a tus Mac mini (GitHub Actions) las apps con TestFlight desactualizado"
-                    : "Conecta GitHub en Ajustes para compilar en tus Mac mini")
+                .disabled(!model.hasHub || model.testFlightCandidates.isEmpty)
+                .help(model.hasHub
+                    ? "Pide a Blender Dev Apps (Xcode Cloud) TestFlight de las apps con cambios nativos sin compilar. Siempre pregunta antes."
+                    : "Conecta Blender Dev Apps en Ajustes para pedir TestFlight")
             } else {
             Button {
                 model.deploySelected()
@@ -209,9 +210,9 @@ struct MenuView: View {
         .padding(12)
     }
 
-    private var macTitle: String {
-        let count = model.macUploadCandidates.count
-        return count == 1 ? "Subir 1 a TestFlight" : "Subir \(count) a TestFlight"
+    private var testFlightTitle: String {
+        let count = model.testFlightCandidates.count
+        return count == 1 ? "Pedir 1 TestFlight…" : "Pedir \(count) TestFlight…"
     }
 
     private var publishTitle: String {
@@ -258,7 +259,9 @@ struct ProjectRowView: View {
                 }
                 if let ios = row.ios {
                     IOSLine(ios: ios)
-                    MacLine(ios: ios, dispatch: model.macDispatches[row.id], hasGitHub: model.hasGitHub)
+                }
+                ForEach(row.hub) { app in
+                    HubLine(app: app, request: model.testFlightRequests[app.slug], showName: row.hub.count > 1 || app.label != row.summary.label)
                 }
             }
             Spacer(minLength: 4)
@@ -333,16 +336,11 @@ struct ProjectRowView: View {
                 NSWorkspace.shared.open(URL(string: "https://appstoreconnect.apple.com/apps")!)
             }
         }
-        if model.hasGitHub, row.git != nil {
+        if model.hasHub, !row.hub.isEmpty {
             Divider()
-            if row.ios?.macWorkflowInstalled == true {
-                Button("Subir a TestFlight en Mac mini") { model.uploadToTestFlightOnMac(row) }
-                    .disabled(!model.canBuildOnMac(row))
-            } else if row.ios == nil || row.ios?.macWorkflowInstalled == false {
-                Button("Instalar workflow de TestFlight (Mac mini) en el repo…") { model.installMacWorkflow(row) }
-            }
-            if let url = row.ios?.macRun?.htmlUrl.flatMap(URL.init(string:)) {
-                Button("Ver última ejecución en GitHub") { NSWorkspace.shared.open(url) }
+            ForEach(row.hub) { app in
+                Button("Pedir TestFlight de \(app.label) (Xcode Cloud)…") { model.requestTestFlight([app]) }
+                    .disabled(model.testFlightRequests[app.slug] == .sending || app.testFlight == .building)
             }
         }
         Divider()
@@ -472,59 +470,90 @@ struct IOSLine: View {
     }
 }
 
-/// What the Mac minis are doing for this app.
-struct MacLine: View {
-    let ios: IOSStatus
-    let dispatch: AppModel.MacDispatch?
-    let hasGitHub: Bool
+/// An app from the Blender Dev Apps catalog: its TestFlight and App Store, as the hub sees them.
+struct HubLine: View {
+    let app: HubApp
+    let request: AppModel.TestFlightRequest?
+    let showName: Bool
 
     var body: some View {
-        if let text {
+        VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 4) {
-                Image(systemName: "macmini")
-                Text(text).lineLimit(2)
+                Image(systemName: icon)
+                Text(testFlightText).lineLimit(2)
             }
-            .font(.caption2)
             .foregroundStyle(color)
+            if let store = app.appStore {
+                HStack(spacing: 4) {
+                    Image(systemName: "applelogo")
+                    Text("\(prefix)App Store \(store.label) \(store.estadoLabel)").lineLimit(1)
+                }
+                .foregroundStyle(store.estado == "rechazado" ? Color.red : Color.secondary)
+            }
         }
+        .font(.caption2)
+        .help(tooltip)
     }
 
-    private var text: String? {
-        switch dispatch {
-        case .sending: return "Mac mini: mandando la señal a GitHub…"
-        case .running: return "Mac mini: compilando y subiendo a TestFlight…"
-        case .done(let build): return "Mac mini: subió el build \(build ?? "") a TestFlight"
-        case .failed(let message): return "Mac mini: \(message)"
-        case nil: break
-        }
-        if let run = ios.macRun {
-            let build = run.buildNumber.map { "build \($0)" } ?? "build"
-            if !run.isFinished { return "Mac mini: compilando \(build)…" }
-            let when = run.createdAt.flatMap(parseDate).map { " · \($0.formatted(.relative(presentation: .named)))" } ?? ""
-            return run.succeeded ? "Mac mini: \(build) subido\(when)" : "Mac mini: falló \(build)\(when)"
-        }
-        switch ios.macWorkflowInstalled {
-        case true?: return "Mac mini: listo, aún sin builds"
-        case false?: return "Mac mini: instala el workflow (clic derecho)"
-        case nil: return nil
+    private var prefix: String { showName ? "\(app.label) · " : "" }
+
+    private var icon: String {
+        switch (request, app.testFlight) {
+        case (.failed?, _), (_, .failed): return "xmark.octagon.fill"
+        case (.sending?, _), (.sent?, _), (_, .building): return "arrow.up.circle"
+        case (_, .pending), (_, .none): return "exclamationmark.triangle.fill"
+        case (_, .upToDate): return "airplane"
         }
     }
 
     private var color: Color {
-        switch dispatch {
-        case .failed: return .red
-        case .sending, .running: return .blue
-        default: break
+        switch (request, app.testFlight) {
+        case (.failed?, _), (_, .failed): return .red
+        case (.sending?, _), (.sent?, _), (_, .building): return .blue
+        case (_, .pending): return .orange
+        default: return .secondary
         }
-        if let run = ios.macRun {
-            if !run.isFinished { return .blue }
-            return run.succeeded ? .secondary : .red
+    }
+
+    private var testFlightText: String {
+        switch request {
+        case .sending?: return "\(prefix)Pidiendo TestFlight a Blender Dev Apps…"
+        case .sent?: return "\(prefix)TestFlight pedido a Xcode Cloud"
+        case .failed(let message)?: return "\(prefix)No se pudo pedir TestFlight: \(message)"
+        case nil: break
         }
-        return .secondary
+        switch app.testFlight {
+        case .upToDate:
+            return "\(prefix)TestFlight al día con los cambios nativos"
+        case .pending:
+            let since = app.iosPendienteDesde.flatMap(parseDate).map { " desde \($0.formatted(.relative(presentation: .named)))" } ?? ""
+            let message = app.iosPendienteMensaje.map { ": «\($0)»" } ?? ""
+            return "\(prefix)TestFlight desactualizado\(since)\(message)"
+        case .building:
+            return "\(prefix)Xcode Cloud compilando para TestFlight…"
+        case .failed:
+            return "\(prefix)Falló el último build de TestFlight"
+        case .none:
+            return "\(prefix)Nunca se ha compilado para TestFlight desde la consola"
+        }
+    }
+
+    private var tooltip: String {
+        var lines = ["Blender Dev Apps: \(app.slug)"]
+        if let commit = app.iosCompiladoCommit { lines.append("Último compilado: \(commit.prefix(7))") }
+        if let commit = app.iosPendienteCommit { lines.append("Pendiente: \(commit.prefix(7))") }
+        for missing in app.faltantes ?? [] where missing.peso != "aviso" {
+            lines.append("• \(missing.que)")
+        }
+        return lines.joined(separator: "\n")
     }
 
     private func parseDate(_ string: String) -> Date? {
-        ISO8601DateFormatter().date(from: string)
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: string) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: string)
     }
 }
 

@@ -31,6 +31,24 @@ enum Keychain {
         }
     }
 
+    /// URL and key (scope "devops") of the Blender Dev Apps MCP.
+    struct HubCredentials: Codable {
+        var endpoint: URL
+        var key: String
+    }
+
+    static func loadHub() -> HubCredentials? {
+        load(account: "devops-hub").flatMap { try? JSONDecoder().decode(HubCredentials.self, from: $0) }
+    }
+
+    static func saveHub(_ hub: HubCredentials?) {
+        if let hub, let data = try? JSONEncoder().encode(hub) {
+            save(data, account: "devops-hub")
+        } else {
+            delete(account: "devops-hub")
+        }
+    }
+
     private static func query(account: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,

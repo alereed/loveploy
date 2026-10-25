@@ -94,42 +94,12 @@ public struct GitHubClient: Sendable {
 
     // MARK: - Plumbing
 
-    // MARK: - Actions (TestFlight builds on self-hosted Macs)
-
-    /// Recent runs of a workflow, newest first. Throws a 404 when the workflow isn't in the repo.
-    public func workflowRuns(repo: String, workflow: String, perPage: Int = 10) async throws -> [WorkflowRun] {
+    /// Actions runs on a commit (checks such as the Mac mini build), newest first.
+    public func runs(repo: String, commit: String) async throws -> [WorkflowRun] {
         struct Response: Decodable { let workflowRuns: [WorkflowRun]? }
-        let response: Response = try await get("/repos/\(repo)/actions/workflows/\(Self.escape(workflow))/runs?per_page=\(perPage)")
+        let response: Response = try await get("/repos/\(repo)/actions/runs?head_sha=\(commit)&per_page=20")
         return response.workflowRuns ?? []
     }
-
-    /// Starts a `workflow_dispatch` run on `ref` with the given inputs.
-    public func dispatchWorkflow(repo: String, workflow: String, ref: String, inputs: [String: String]) async throws {
-        let body = try JSONSerialization.data(withJSONObject: ["ref": ref, "inputs": inputs])
-        let _: Empty = try await send("POST", path: "/repos/\(repo)/actions/workflows/\(Self.escape(workflow))/dispatches", body: body)
-    }
-
-    /// Blob SHA of a file on a branch, or nil when it doesn't exist.
-    public func fileSHA(repo: String, path: String, branch: String?) async throws -> String? {
-        struct Response: Decodable { let sha: String }
-        let ref = branch.map { "?ref=\(Self.escape($0))" } ?? ""
-        do {
-            let response: Response = try await get("/repos/\(repo)/contents/\(Self.escape(path))\(ref)")
-            return response.sha
-        } catch let error as GitHubError where error.status == 404 {
-            return nil
-        }
-    }
-
-    /// Creates or updates a file with a commit on `branch`.
-    public func putFile(repo: String, path: String, content: String, message: String, branch: String?) async throws {
-        var body: [String: Any] = ["message": message, "content": Data(content.utf8).base64EncodedString()]
-        if let branch { body["branch"] = branch }
-        if let sha = try await fileSHA(repo: repo, path: path, branch: branch) { body["sha"] = sha }
-        let _: Empty = try await send("PUT", path: "/repos/\(repo)/contents/\(Self.escape(path))", body: try JSONSerialization.data(withJSONObject: body))
-    }
-
-    private struct Empty: Decodable {}
 
     private struct ErrorMessage: Decodable { let message: String }
 
@@ -184,16 +154,16 @@ public struct WorkflowRun: Decodable, Hashable, Sendable {
     /// success, failure, cancelled, timed_out… once completed.
     public let conclusion: String?
     public let headSha: String?
-    public let displayTitle: String?
+    public let name: String?
     public let htmlUrl: String?
     public let createdAt: String?
 
-    public init(id: Int, status: String?, conclusion: String?, headSha: String?, displayTitle: String?, htmlUrl: String? = nil, createdAt: String?) {
+    public init(id: Int, status: String?, conclusion: String?, headSha: String?, name: String?, htmlUrl: String? = nil, createdAt: String?) {
         self.id = id
         self.status = status
         self.conclusion = conclusion
         self.headSha = headSha
-        self.displayTitle = displayTitle
+        self.name = name
         self.htmlUrl = htmlUrl
         self.createdAt = createdAt
     }

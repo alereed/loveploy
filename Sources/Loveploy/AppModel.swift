@@ -25,8 +25,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var errors: [String] = []
     @Published private(set) var lastRefresh: Date?
     @Published private(set) var githubLogin: String?
-    /// TestFlight builds sent to the Mac minis from this session.
-    @Published private(set) var macDispatches: [String: MacDispatch] = [:]
+    /// TestFlight builds asked to the hub from this session, by app slug.
+    @Published private(set) var testFlightRequests: [String: TestFlightRequest] = [:]
+    /// iOS apps in the Blender Dev Apps catalog, once connected.
+    @Published private(set) var hubAppCount: Int?
     /// What Turbo is waiting on; published so the menu can show when each project goes out.
     @Published private(set) var turboPlanner: TurboPlanner
     @Published var filter: Filter = .pending
@@ -36,6 +38,7 @@ final class AppModel: ObservableObject {
     private let client: LovableWebClient
     private let store = StateStore.default()
     private var githubToken: String?
+    private var hubCredentials: Keychain.HubCredentials?
     private var loginWindow: LoginWindowController?
     private var timer: Timer?
     private static let refreshInterval: TimeInterval = 15 * 60
@@ -53,6 +56,7 @@ final class AppModel: ObservableObject {
         account = credentials?.email
         isSignedIn = credentials != nil
         githubToken = Keychain.loadGitHubToken()
+        hubCredentials = Keychain.loadHub()
         let state = store.load()
         self.state = state
         turboPlanner = TurboPlanner(settleDelay: TimeInterval(state.turboDelayMinutes * 60))
@@ -75,7 +79,7 @@ final class AppModel: ObservableObject {
     var visibleRows: [ProjectRow] {
         switch filter {
         case .all: return rows
-        case .ios: return rows.filter { $0.ios != nil }
+        case .ios: return rows.filter(\.hasIOS)
         case .pending: return rows.filter { $0.state.needsDeploy || isSelected($0) || progress[$0.id] != nil || $0.git?.remoteAhead == true }
         }
     }
@@ -203,6 +207,15 @@ final class AppModel: ObservableObject {
         var newRows = await loadDetails(for: listed)
         newRows = await attachGit(to: newRows)
         newRows = await attachIOS(to: newRows)
+        if let hub {
+            do {
+                let apps = try await hub.panel()
+                hubAppCount = apps.filter(\.hasIOS).count
+                newRows = newRows.map { $0.with(hub: hubApps(forRepo: $0.git?.repo, in: apps)) }
+            } catch {
+                newErrors.append("Blender Dev Apps: \(error.localizedDescription)")
+            }
+        }
         if githubToken != nil, githubLogin == nil {
             githubLogin = try? await GitHubClient(token: githubToken!).viewerLogin()
         }
@@ -280,34 +293,18 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// TestFlight and App Store status for projects that build for iOS, on Lovable or on
-    /// the Mac minis (GitHub Actions).
+    /// TestFlight and App Store status for projects whose iOS app Lovable builds.
     private func attachIOS(to rows: [ProjectRow]) async -> [ProjectRow] {
         let client = client
-        let github = githubToken.map { GitHubClient(token: $0) }
         return await withTaskGroup(of: ProjectRow.self) { group in
             var queue = rows[...]
             var result: [ProjectRow] = []
             func startNext() {
                 guard let row = queue.popFirst() else { return }
                 group.addTask {
-                    let runs = (try? await client.iosBuildRuns(projectID: row.id)) ?? []
-                    var macRuns: [WorkflowRun] = []
-                    var installed: Bool?
-                    if let github, let repo = row.git?.repo {
-                        do {
-                            macRuns = try await github.workflowRuns(repo: repo, workflow: MacTestFlight.workflowFile)
-                            installed = true
-                        } catch let error as GitHubError where error.status == 404 {
-                            installed = false
-                        } catch {}
-                    }
-                    guard !runs.isEmpty || !macRuns.isEmpty || installed == true else { return row }
-                    let builds = runs.isEmpty ? [] : ((try? await client.storeBuilds(projectID: row.id)) ?? [])
-                    let ios = IOSStatus.evaluate(
-                        runs: runs, builds: builds, latestCommitSha: row.details?.latestCommitSha,
-                        macRuns: macRuns, macWorkflowInstalled: installed
-                    ) ?? IOSStatus(testFlight: .none, latestUpload: nil, live: nil, macWorkflowInstalled: installed)
+                    guard let runs = try? await client.iosBuildRuns(projectID: row.id), !runs.isEmpty else { return row }
+                    let builds = (try? await client.storeBuilds(projectID: row.id)) ?? []
+                    let ios = IOSStatus.evaluate(runs: runs, builds: builds, latestCommitSha: row.details?.latestCommitSha)
                     return row.with(ios: ios)
                 }
             }
@@ -320,125 +317,119 @@ final class AppModel: ObservableObject {
         }
     }
 
-    // MARK: - TestFlight on the Mac minis
+    // MARK: - Blender Dev Apps (TestFlight through the hub)
 
-    enum MacDispatch: Equatable {
+    enum TestFlightRequest: Equatable {
         case sending
-        case running(url: String?)
-        case done(build: String?)
+        case sent
         case failed(String)
     }
 
-    /// The project can be sent to the Mac minis: GitHub connected and the workflow in its repo.
-    func canBuildOnMac(_ row: ProjectRow) -> Bool {
-        hasGitHub && row.git != nil && row.ios?.macWorkflowInstalled == true && !isMacBusy(row)
+    var hasHub: Bool { hubCredentials != nil }
+
+    private var hub: DevOpsHub? {
+        hubCredentials.map { DevOpsHub(endpoint: $0.endpoint, key: $0.key) }
     }
 
-    func isMacBusy(_ row: ProjectRow) -> Bool {
-        switch macDispatches[row.id] {
-        case .sending, .running: return true
-        default: return row.ios?.macRun.map { !$0.isFinished } ?? false
+    func connectHub(url: String, key: String) async throws {
+        guard let endpoint = URL(string: url.trimmingCharacters(in: .whitespacesAndNewlines)),
+              endpoint.scheme == "https" else {
+            throw HubError(message: "Escribe la URL https del MCP de DevOps.")
         }
+        let credentials = Keychain.HubCredentials(endpoint: endpoint, key: key.trimmingCharacters(in: .whitespacesAndNewlines))
+        let apps = try await DevOpsHub(endpoint: credentials.endpoint, key: credentials.key).panel()
+        hubCredentials = credentials
+        hubAppCount = apps.filter(\.hasIOS).count
+        Keychain.saveHub(credentials)
+        await refresh()
     }
 
-    var macUploadCandidates: [ProjectRow] {
-        rows.filter { $0.ios?.testFlightNeedsUpload == true && canBuildOnMac($0) }
+    func disconnectHub() {
+        hubCredentials = nil
+        hubAppCount = nil
+        Keychain.saveHub(nil)
+        Task { await refresh() }
     }
 
-    func uploadOutdatedToMac() {
-        for row in macUploadCandidates {
-            uploadToTestFlightOnMac(row)
-        }
+    /// Catalog apps with native changes no TestFlight build has.
+    var testFlightCandidates: [HubApp] {
+        rows.flatMap(\.hub).filter { $0.needsTestFlight && testFlightRequests[$0.slug] != .sending }
     }
 
-    /// Sends the signal: dispatches the workflow on the project's repo, then follows the run.
-    func uploadToTestFlightOnMac(_ row: ProjectRow) {
-        guard let token = githubToken, let git = row.git else { return }
-        let github = GitHubClient(token: token)
-        let repo = git.repo
-        let branch = git.branch ?? "main"
-        // Lovable's commit is only on GitHub when they're in sync (or GitHub is ahead).
-        let commit = ["in_sync", "remote_ahead"].contains(git.syncState ?? "") ? row.details?.latestCommitSha : nil
-        let build = MacTestFlight.nextBuildNumber(known: (row.ios?.knownBuildNumbers ?? []) + [state.macBuildNumbers[row.id]])
-        let dispatchID = "lp-" + UUID().uuidString.prefix(8).lowercased()
-        var inputs = ["loveploy_id": dispatchID]
-        inputs["commit_sha"] = commit
-        inputs["build_number"] = build
-        macDispatches[row.id] = .sending
+    /// Asks the hub for TestFlight builds (Xcode Cloud). It costs Mac hours and has a daily
+    /// limit, so it always asks first and says how many went out today.
+    func requestTestFlight(_ apps: [HubApp]) {
+        guard let hub, !apps.isEmpty else { return }
+        let github = githubToken.map { GitHubClient(token: $0) }
+        let repos = Dictionary(rows.flatMap { row in row.hub.map { ($0.slug, row.git?.repo) } }, uniquingKeysWith: { first, _ in first })
 
         Task {
-            do {
-                try await github.dispatchWorkflow(repo: repo, workflow: MacTestFlight.workflowFile, ref: branch, inputs: inputs)
-                if let build {
-                    state.macBuildNumbers[row.id] = build
-                    save()
+            let today = (try? await hub.recentBuilds()).map { xcodeCloudBuildsToday($0) }
+            var checks: [String] = []
+            if let github {
+                for app in apps {
+                    guard let commit = app.iosPendienteCommit, let repo = repos[app.slug] ?? nil else { continue }
+                    if let runs = try? await github.runs(repo: repo, commit: commit) {
+                        checks.append("\(app.label): \(Self.checksSummary(runs))")
+                    }
                 }
-                let run = try await followMacRun(github: github, repo: repo, dispatchID: dispatchID, projectID: row.id)
-                if run?.succeeded == true {
-                    macDispatches[row.id] = .done(build: run?.buildNumber)
-                    notify(title: "TestFlight: \(row.summary.label)", body: "El Mac mini subió el build \(run?.buildNumber ?? "")")
-                } else {
-                    let reason = run == nil ? "No apareció la ejecución en GitHub." : "Falló en el Mac mini; revisa la ejecución en GitHub."
-                    macDispatches[row.id] = .failed(reason)
-                    notify(title: "TestFlight: \(row.summary.label)", body: reason)
-                }
-            } catch {
-                macDispatches[row.id] = .failed(error.localizedDescription)
             }
+            guard confirmTestFlight(apps, today: today, checks: checks) else { return }
+
+            for app in apps {
+                testFlightRequests[app.slug] = .sending
+                do {
+                    _ = try await hub.requestTestFlight(app: app.slug)
+                    testFlightRequests[app.slug] = .sent
+                } catch {
+                    testFlightRequests[app.slug] = .failed(error.localizedDescription)
+                }
+            }
+            let sent = apps.filter { testFlightRequests[$0.slug] == .sent }.map(\.label)
+            notify(title: "TestFlight pedido", body: sent.isEmpty ? "No se pudo pedir ningún build." : sent.joined(separator: ", "))
             await refresh()
         }
     }
 
-    /// Finds the run with our ID, then waits for it to finish (up to 2 hours).
-    private func followMacRun(github: GitHubClient, repo: String, dispatchID: String, projectID: String) async throws -> WorkflowRun? {
-        var run: WorkflowRun?
-        for _ in 0..<24 where run == nil {
-            try await Task.sleep(nanoseconds: 5_000_000_000)
-            run = try? await github.workflowRuns(repo: repo, workflow: MacTestFlight.workflowFile).first { $0.loveployID == dispatchID }
-        }
-        guard var current = run else { return nil }
-        macDispatches[projectID] = .running(url: current.htmlUrl)
-        let deadline = Date().addingTimeInterval(2 * 60 * 60)
-        while !current.isFinished, Date() < deadline {
-            try await Task.sleep(nanoseconds: 30_000_000_000)
-            if let updated = try? await github.workflowRuns(repo: repo, workflow: MacTestFlight.workflowFile).first(where: { $0.id == current.id }) {
-                current = updated
-            }
-        }
-        return current
-    }
-
-    /// Commits Loveploy's TestFlight workflow to the project's repo (after confirming).
-    func installMacWorkflow(_ row: ProjectRow) {
-        guard let token = githubToken, let git = row.git else { return }
+    private func confirmTestFlight(_ apps: [HubApp], today: Int?, checks: [String]) -> Bool {
+        let limit = DevOpsHub.dailyTestFlightLimit
+        let overLimit = today.map { $0 + apps.count > limit } ?? false
         let alert = NSAlert()
-        alert.messageText = "¿Instalar el workflow de TestFlight en \(git.repo)?"
-        alert.informativeText = "Se agrega \(MacTestFlight.workflowPath) con un commit en la rama \(git.branch ?? "main"). Lovable lo sincroniza como cualquier cambio del repo. Corre en tus runners con las etiquetas self-hosted y macOS."
-        alert.addButton(withTitle: "Instalar")
+        alert.messageText = apps.count == 1
+            ? "¿Pedir TestFlight de \(apps[0].label)?"
+            : "¿Pedir TestFlight de \(apps.count) apps?"
+        var lines = [
+            apps.map { app in "• \(app.label)" + (app.iosPendienteMensaje.map { ": «\($0)»" } ?? "") }.joined(separator: "\n"),
+            "",
+            "Va por Xcode Cloud (gasta horas de la membresía).",
+            today.map { "Van \($0) de \(limit) hoy." } ?? "No se pudo leer cuántos van hoy.",
+        ]
+        if !checks.isEmpty {
+            lines.append("")
+            lines.append("Checks de GitHub en el commit pendiente:")
+            lines.append(contentsOf: checks)
+        }
+        if overLimit {
+            lines.append("")
+            lines.append("⚠️ Con estos se pasa del tope de \(limit) al día.")
+        }
+        alert.informativeText = lines.joined(separator: "\n")
+        alert.alertStyle = overLimit ? .critical : .informational
+        alert.addButton(withTitle: overLimit ? "Pedir de todos modos" : "Pedir TestFlight")
         alert.addButton(withTitle: "Cancelar")
         NSApp.activate(ignoringOtherApps: true)
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        return alert.runModal() == .alertFirstButtonReturn
+    }
 
-        macDispatches[row.id] = .sending
-        Task {
-            do {
-                try await GitHubClient(token: token).putFile(
-                    repo: git.repo,
-                    path: MacTestFlight.workflowPath,
-                    content: MacTestFlight.workflowYAML,
-                    message: "Agregar workflow de TestFlight para Mac mini (Loveploy)",
-                    branch: git.branch
-                )
-                macDispatches[row.id] = nil
-            } catch {
-                macDispatches[row.id] = .failed("No se pudo instalar el workflow: \(error.localizedDescription)")
-            }
-            await refresh()
-        }
+    private static func checksSummary(_ runs: [WorkflowRun]) -> String {
+        guard !runs.isEmpty else { return "sin checks" }
+        if runs.contains(where: { !$0.isFinished }) { return "corriendo" }
+        let failed = runs.filter { $0.conclusion == "failure" }.compactMap(\.name)
+        return failed.isEmpty ? "verde ✓" : "rojo ✗ (\(failed.joined(separator: ", ")))"
     }
 
     var iosNeedingUpload: Int {
-        rows.filter { $0.ios?.testFlightNeedsUpload == true }.count
+        rows.filter(\.iosNeedsBuild).count
     }
 
     private static func order(_ a: ProjectRow, _ b: ProjectRow) -> Bool {

@@ -6,12 +6,18 @@ struct SettingsView: View {
     @State private var githubToken = ""
     @State private var isConnecting = false
     @State private var githubError: String?
+    @State private var hubURL = ""
+    @State private var hubKey = ""
+    @State private var isConnectingHub = false
+    @State private var hubError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             lovableSection
             Divider()
             turboSection
+            Divider()
+            hubSection
             Divider()
             githubSection
             Divider()
@@ -68,6 +74,40 @@ struct SettingsView: View {
         }
     }
 
+    private var hubSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Blender Dev Apps (iOS)").font(.subheadline.bold())
+            if model.hasHub {
+                HStack {
+                    Label(model.hubAppCount.map { "Conectado · \($0) apps de iOS" } ?? "Conectado", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Spacer()
+                    Button("Desconectar", role: .destructive) { model.disconnectHub() }
+                        .buttonStyle(.borderless)
+                }
+                Text("TestFlight va por Xcode Cloud, como el botón del portal. Siempre pregunta antes y muestra cuántos van del tope de 7 al día. Turbo nunca lo pide solo.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Conecta el hub para ver, por app, si TestFlight tiene los últimos cambios nativos y qué versión está en la App Store, y para pedir builds.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                TextField("URL del MCP de DevOps (https://…)", text: $hubURL)
+                    .textFieldStyle(.roundedBorder)
+                SecureField("Llave con alcance devops", text: $hubKey)
+                    .textFieldStyle(.roundedBorder)
+                if let hubError {
+                    Text(hubError).font(.caption).foregroundStyle(.red)
+                }
+                HStack {
+                    Spacer()
+                    Button("Conectar") { connectHub() }
+                        .disabled(hubURL.isEmpty || hubKey.trimmingCharacters(in: .whitespaces).isEmpty || isConnectingHub)
+                }
+            }
+        }
+    }
+
     private var githubSection: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("GitHub (opcional)").font(.subheadline.bold())
@@ -80,7 +120,7 @@ struct SettingsView: View {
                         .buttonStyle(.borderless)
                 }
             } else {
-                Text("Lovable ya dice qué repo usa cada proyecto y si GitHub va adelante. Con un token de GitHub, además ves qué commits faltan por publicar y puedes compilar las apps de iOS en tus Mac mini.")
+                Text("Lovable ya dice qué repo usa cada proyecto y si GitHub va adelante. Con un token de GitHub, además ves qué commits faltan por publicar y, al pedir TestFlight, si los checks del Mac mini están en verde.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 SecureField("Token de GitHub (github_pat_… o ghp_…)", text: $githubToken)
@@ -95,7 +135,7 @@ struct SettingsView: View {
                     Button("Conectar") { connectGitHub() }
                         .disabled(githubToken.trimmingCharacters(in: .whitespaces).isEmpty || isConnecting)
                 }
-                Text("Para ver commits basta lectura de «Contents». Para TestFlight en Mac mini: «Actions», «Contents» y «Workflows» con escritura (o los scopes «repo» y «workflow» en un token clásico).")
+                Text("Solo lectura: «Contents», «Actions» y «Metadata» (o el scope «repo» en un token clásico).")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -112,6 +152,21 @@ struct SettingsView: View {
                 model.resetExclusions()
             }
             .disabled(model.state.excluded.isEmpty)
+        }
+    }
+
+    private func connectHub() {
+        isConnectingHub = true
+        hubError = nil
+        Task {
+            do {
+                try await model.connectHub(url: hubURL, key: hubKey)
+                hubURL = ""
+                hubKey = ""
+            } catch {
+                hubError = error.localizedDescription
+            }
+            isConnectingHub = false
         }
     }
 
