@@ -151,7 +151,10 @@ final class LoveployCoreTests: XCTestCase {
         let client = makeClient(transport)
         let collected = Collected()
         await Deployer(maxConcurrent: 2).run(
-            jobs: [("prj_1", client), ("prj_2", client)],
+            jobs: [
+                DeployJob(projectID: "prj_1", client: client, githubSha: { lovableSha in "gh-\(lovableSha ?? "")" }),
+                DeployJob(projectID: "prj_2", client: client),
+            ],
             onUpdate: { id, progress in await collected.update(id, progress) },
             onRecord: { id, record in await collected.record(id, record) }
         )
@@ -165,6 +168,7 @@ final class LoveployCoreTests: XCTestCase {
         XCTAssertTrue(message.contains("Build failed"))
         XCTAssertEqual(records["prj_1"]?.commitSha, "c0ffee")
         XCTAssertEqual(records["prj_1"]?.url, "https://uno.lovable.app")
+        XCTAssertEqual(records["prj_1"]?.githubSha, "gh-c0ffee")
         XCTAssertNil(records["prj_2"])
         let body = transport.requests.first { $0.httpMethod == "POST" }?.httpBody
         XCTAssertEqual(body.map { String(decoding: $0, as: UTF8.self) }, "{}")

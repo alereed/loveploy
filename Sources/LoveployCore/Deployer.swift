@@ -10,6 +10,20 @@ public enum DeployProgress: Hashable, Sendable {
     case timedOut
 }
 
+/// One project to publish.
+public struct DeployJob: Sendable {
+    public let projectID: String
+    public let client: LovableClient
+    /// Given Lovable's commit at publish time, returns the GitHub SHA to record. nil when not linked.
+    public let githubSha: (@Sendable (String?) async -> String?)?
+
+    public init(projectID: String, client: LovableClient, githubSha: (@Sendable (String?) async -> String?)? = nil) {
+        self.projectID = projectID
+        self.client = client
+        self.githubSha = githubSha
+    }
+}
+
 /// Publishes a batch of projects, a few at a time.
 public struct Deployer: Sendable {
     public let maxConcurrent: Int
@@ -24,19 +38,25 @@ public struct Deployer: Sendable {
 
     /// Publishes one project and, on success, returns the record to store.
     public func deploy(
-        projectID: String,
-        client: LovableClient,
+        _ job: DeployJob,
         onProgress: @Sendable (DeployProgress) async -> Void
     ) async -> (DeployProgress, PublishRecord?) {
+        let (projectID, client) = (job.projectID, job.client)
         await onProgress(.publishing)
         do {
             // Read the commit right before publishing, so the record matches what goes live.
             let detail = try? await client.getProject(id: projectID)
+            let githubSha = await job.githubSha?(detail?.latestCommitSha)
             let started = try await client.publish(projectID: projectID)
             let finished = try await client.waitForDeployment(projectID: projectID, deployment: started, timeout: pollTimeout)
             switch finished.status {
             case .completed:
-                let record = PublishRecord(commitSha: detail?.latestCommitSha, publishedAt: now(), url: finished.url)
+                let record = PublishRecord(
+                    commitSha: detail?.latestCommitSha,
+                    publishedAt: now(),
+                    url: finished.url,
+                    githubSha: githubSha
+                )
                 return (.completed(url: finished.url), record)
             case .error:
                 let message = [finished.errorMessage, publishFailureHint(errorClass: finished.errorClass)]
@@ -56,7 +76,7 @@ public struct Deployer: Sendable {
     /// Publishes every job, at most `maxConcurrent` at once. `onUpdate` fires for each
     /// status change; `onRecord` fires once per successful publish.
     public func run(
-        jobs: [(projectID: String, client: LovableClient)],
+        jobs: [DeployJob],
         onUpdate: @escaping @Sendable (String, DeployProgress) async -> Void,
         onRecord: @escaping @Sendable (String, PublishRecord) async -> Void
     ) async {
@@ -68,7 +88,7 @@ public struct Deployer: Sendable {
             func startNext() {
                 guard let job = pending.popFirst() else { return }
                 group.addTask {
-                    let (result, record) = await deploy(projectID: job.projectID, client: job.client) { progress in
+                    let (result, record) = await deploy(job) { progress in
                         await onUpdate(job.projectID, progress)
                     }
                     if let record {

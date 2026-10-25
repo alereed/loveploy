@@ -21,15 +21,20 @@ final class AppModel: ObservableObject {
     @Published private(set) var isDeploying = false
     @Published private(set) var errors: [String] = []
     @Published private(set) var lastRefresh: Date?
+    @Published private(set) var githubLogin: String?
+    /// Repos the GitHub token can see, most recently pushed first.
+    @Published private(set) var githubRepos: [GitHubRepo] = []
     @Published var filter: Filter = .pending
     @Published var showingSettings = false
 
     private let store = StateStore.default()
+    private var githubToken: String?
     private var timer: Timer?
     private static let refreshInterval: TimeInterval = 15 * 60
 
     init() {
         keys = Keychain.loadKeys()
+        githubToken = Keychain.loadGitHubToken()
         state = store.load()
         if keys.isEmpty {
             showingSettings = true
@@ -90,7 +95,12 @@ final class AppModel: ObservableObject {
     }
 
     func markUpToDate(_ row: ProjectRow) {
-        let record = PublishRecord(commitSha: row.latestCommitSha, publishedAt: Date(), url: row.record?.url)
+        let record = PublishRecord(
+            commitSha: row.latestCommitSha,
+            publishedAt: Date(),
+            url: row.record?.url,
+            githubSha: row.githubShaForPublish
+        )
         state.records[row.id] = record
         replace(row.with(record: record))
         save()
@@ -123,6 +133,46 @@ final class AppModel: ObservableObject {
     func removeKey(_ entry: APIKeyEntry) {
         keys.removeAll { $0.id == entry.id }
         Keychain.saveKeys(keys)
+        Task { await refresh() }
+    }
+
+    // MARK: - GitHub
+
+    var hasGitHub: Bool { githubToken != nil }
+
+    func connectGitHub(token: String) async throws {
+        let trimmed = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        githubLogin = try await GitHubClient(token: trimmed).viewerLogin()
+        githubToken = trimmed
+        Keychain.saveGitHubToken(trimmed)
+        await refresh()
+    }
+
+    func disconnectGitHub() {
+        githubToken = nil
+        githubLogin = nil
+        githubRepos = []
+        Keychain.saveGitHubToken(nil)
+        Task { await refresh() }
+    }
+
+    /// Repos for the "link" menu, closest names first.
+    func repoChoices(for row: ProjectRow) -> [GitHubRepo] {
+        Array(rankRepos(for: row.summary.name, repos: githubRepos.filter { !$0.isArchived }).prefix(25))
+    }
+
+    func link(_ row: ProjectRow, to repo: GitHubRepo) {
+        let shares = repo.head?.sha != nil && repo.head?.sha == row.latestCommitSha
+        state.repoLinks[row.id] = RepoLink(fullName: repo.fullName, source: shares ? .commit : .manual)
+        state.unlinked.remove(row.id)
+        save()
+        Task { await refresh() }
+    }
+
+    func unlink(_ row: ProjectRow) {
+        state.repoLinks[row.id] = nil
+        state.unlinked.insert(row.id)
+        save()
         Task { await refresh() }
     }
 
@@ -175,9 +225,103 @@ final class AppModel: ObservableObject {
             }
         }
 
+        if let githubToken {
+            do {
+                newRows = try await attachGitHub(to: newRows, client: GitHubClient(token: githubToken))
+            } catch {
+                newErrors.append("GitHub: \(error.localizedDescription)")
+            }
+        }
+
         rows = newRows.sorted(by: Self.order)
         errors = newErrors
         lastRefresh = Date()
+    }
+
+    /// Links each project to its repo (remembering auto-matches), reads the branch head,
+    /// and lists the commits made since the last publish.
+    private func attachGitHub(to rows: [ProjectRow], client: GitHubClient) async throws -> [ProjectRow] {
+        if githubLogin == nil {
+            githubLogin = try? await client.viewerLogin()
+        }
+        let repos = try await client.repositories()
+        githubRepos = repos
+        let reposByName = Dictionary(repos.map { ($0.fullName.lowercased(), $0) }, uniquingKeysWith: { first, _ in first })
+
+        var linked: [(row: ProjectRow, link: RepoLink, repo: GitHubRepo?)] = []
+        var result: [ProjectRow] = []
+        for row in rows {
+            var link = state.repoLinks[row.id]
+            if link == nil, !state.unlinked.contains(row.id) {
+                link = matchRepo(projectName: row.summary.name, latestCommitSha: row.latestCommitSha, repos: repos)
+            }
+            guard var link else {
+                result.append(row)
+                continue
+            }
+            let repo = reposByName[link.fullName.lowercased()]
+            // Seeing Lovable's commit at the repo head proves the two share SHAs.
+            if link.source != .commit, link.branch == nil, let sha = row.latestCommitSha, repo?.head?.sha == sha {
+                link.source = .commit
+            }
+            if state.repoLinks[row.id] != link {
+                state.repoLinks[row.id] = link
+            }
+            linked.append((row, link, repo))
+        }
+        save()
+
+        let statuses = await withTaskGroup(of: (String, GitHubStatus).self) { group in
+            var queue = linked[...]
+            var statuses: [String: GitHubStatus] = [:]
+            func startNext() {
+                guard let item = queue.popFirst() else { return }
+                group.addTask { (item.row.id, await Self.githubStatus(row: item.row, link: item.link, repo: item.repo, client: client)) }
+            }
+            for _ in 0..<4 { startNext() }
+            while let item = await group.next() {
+                statuses[item.0] = item.1
+                startNext()
+            }
+            return statuses
+        }
+
+        for item in linked {
+            result.append(ProjectRow(
+                summary: item.row.summary,
+                workspaceName: item.row.workspaceName,
+                latestCommitSha: item.row.latestCommitSha,
+                previewUrl: item.row.previewUrl,
+                record: item.row.record,
+                keyIndex: item.row.keyIndex,
+                github: statuses[item.row.id]
+            ))
+        }
+        return result
+    }
+
+    private nonisolated static func githubStatus(row: ProjectRow, link: RepoLink, repo: GitHubRepo?, client: GitHubClient) async -> GitHubStatus {
+        let url = repo?.url ?? "https://github.com/\(link.fullName)"
+        var head = repo?.head
+        if let branch = link.branch, branch != repo?.defaultBranch {
+            head = try? await client.branchHead(repo: link.fullName, branch: branch)
+        }
+        guard let head else {
+            let error = repo == nil ? "sin acceso al repo con este token" : "no se pudo leer la rama"
+            return GitHubStatus(link: link, repoURL: url, head: nil, error: error)
+        }
+
+        // Which commit went live last time, in GitHub terms.
+        let published = row.record?.githubSha ?? (link.source == .commit ? row.record?.commitSha : nil)
+        var newCommits: [GitHubCommit]?
+        if let published {
+            if published == head.sha {
+                newCommits = []
+            } else if let comparison = try? await client.compare(repo: link.fullName, base: published, head: head.sha) {
+                newCommits = comparison.commits
+            }
+        }
+        return GitHubStatus(link: link, repoURL: url, head: head, newCommits: newCommits)
     }
 
     /// Fetches `latest_commit_sha` for each project, six requests at a time.
@@ -216,9 +360,14 @@ final class AppModel: ObservableObject {
     func deploySelected() {
         let targets = selectedRows
         guard !targets.isEmpty, !isDeploying else { return }
-        let jobs = targets.compactMap { row -> (projectID: String, client: LovableClient)? in
+        let token = githubToken
+        let jobs = targets.compactMap { row -> DeployJob? in
             guard keys.indices.contains(row.keyIndex) else { return nil }
-            return (row.id, LovableClient(apiKey: keys[row.keyIndex].key))
+            return DeployJob(
+                projectID: row.id,
+                client: LovableClient(apiKey: keys[row.keyIndex].key),
+                githubSha: Self.githubShaResolver(for: row, token: token)
+            )
         }
         isDeploying = true
         progress = [:]
@@ -230,6 +379,22 @@ final class AppModel: ObservableObject {
                 onRecord: { [weak self] id, record in await self?.storeRecord(record, for: id) }
             )
             finishDeploy()
+        }
+    }
+
+    /// What GitHub SHA to record when a project is published. With shared SHAs it's
+    /// Lovable's own commit; otherwise the branch head right before publishing.
+    private static func githubShaResolver(for row: ProjectRow, token: String?) -> (@Sendable (String?) async -> String?)? {
+        guard let github = row.github, let token else { return nil }
+        let repo = github.link.fullName
+        let branch = github.link.branch
+        let shares = github.sharesCommits
+        let fallback = github.head?.sha
+        return { lovableSha in
+            if shares, let lovableSha { return lovableSha }
+            // "HEAD" resolves to the default branch.
+            let head = try? await GitHubClient(token: token).branchHead(repo: repo, branch: branch ?? "HEAD")
+            return head?.sha ?? fallback
         }
     }
 

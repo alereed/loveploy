@@ -183,6 +183,9 @@ struct ProjectRowView: View {
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
+                if let github = row.github {
+                    GitHubLine(row: row, github: github)
+                }
             }
             Spacer(minLength: 4)
             trailing
@@ -241,10 +244,92 @@ struct ProjectRowView: View {
         if row.state == .unknown || row.state == .outdated {
             Button("Marcar como al día (sin publicar)") { model.markUpToDate(row) }
         }
+        if model.hasGitHub {
+            Divider()
+            if let url = row.github?.repoURL.flatMap(URL.init(string:)) {
+                Button("Abrir repo en GitHub") { NSWorkspace.shared.open(url) }
+            }
+            Menu(row.github == nil ? "Vincular repo de GitHub" : "Cambiar repo de GitHub") {
+                ForEach(model.repoChoices(for: row)) { repo in
+                    Button(repo.fullName) { model.link(row, to: repo) }
+                }
+            }
+            if row.github != nil {
+                Button("Desvincular repo") { model.unlink(row) }
+            }
+        }
         Button("Copiar ID del proyecto") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(row.id, forType: .string)
         }
+    }
+}
+
+/// "owner/repo · 3 commits nuevos: «Fix header»", or a warning when Lovable is behind GitHub.
+struct GitHubLine: View {
+    let row: ProjectRow
+    let github: GitHubStatus
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: icon)
+            Text(text).lineLimit(2)
+        }
+        .font(.caption2)
+        .foregroundStyle(color)
+        .help(tooltip)
+    }
+
+    private var repoName: String {
+        github.link.fullName + (github.link.branch.map { "@\($0)" } ?? "")
+    }
+
+    private var behind: Bool { github.lovableIsBehind(latestCommitSha: row.latestCommitSha) }
+
+    private var icon: String {
+        if github.error != nil || behind { return "exclamationmark.triangle.fill" }
+        return "arrow.triangle.branch"
+    }
+
+    private var color: Color {
+        if github.error != nil || behind { return .orange }
+        if let commits = github.newCommits, !commits.isEmpty { return .primary }
+        return .secondary
+    }
+
+    private var text: String {
+        if let error = github.error {
+            return "\(repoName): \(error)"
+        }
+        if behind {
+            return "\(repoName) tiene cambios que Lovable aún no sincroniza; publicar no los incluiría"
+        }
+        if let commits = github.newCommits, let latest = commits.first {
+            let count = commits.count == 1 ? "1 commit nuevo" : "\(commits.count) commits nuevos"
+            return "\(repoName) · \(count): «\(latest.headline)»"
+        }
+        if github.newCommits == nil, row.record != nil, row.record?.githubSha == nil, !github.sharesCommits {
+            return "\(repoName) · se seguirá desde la próxima publicación"
+        }
+        if let head = github.head {
+            return "\(repoName) · «\(head.headline)»"
+        }
+        return repoName
+    }
+
+    private var tooltip: String {
+        var lines = ["Repo: \(github.link.fullName)"]
+        switch github.link.source {
+        case .commit: lines.append("Vinculado por commit (Lovable y GitHub comparten historial)")
+        case .name: lines.append("Vinculado por nombre; si no es el repo correcto, cámbialo con clic derecho")
+        case .manual: lines.append("Vinculado a mano")
+        }
+        if let commits = github.newCommits, !commits.isEmpty {
+            lines.append("")
+            lines.append(contentsOf: commits.prefix(10).map { "• \($0.headline)" })
+            if commits.count > 10 { lines.append("… y \(commits.count - 10) más") }
+        }
+        return lines.joined(separator: "\n")
     }
 }
 

@@ -18,6 +18,21 @@ La API de Lovable dice cuál es el último commit de un proyecto (`latest_commit
 | Al día | Lo publicado coincide con el último commit | No (puedes forzarlo marcando la casilla) |
 | Sin publicar | Nunca se ha publicado | No (puedes incluirlo marcando la casilla) |
 
+### Con GitHub
+
+Si conectas GitHub (Ajustes → GitHub), Loveploy también revisa los repos sincronizados con tus proyectos:
+
+- **Vincula cada proyecto con su repo solo.** Cuando un proyecto está sincronizado, Lovable y GitHub están en el mismo commit, así que Loveploy busca el último commit de Lovable entre las ramas principales de tus repos. Si no lo encuentra, usa el repo cuyo nombre coincide con el del proyecto. Puedes cambiar o quitar el vínculo con clic derecho → **Cambiar repo de GitHub** / **Desvincular repo**.
+- **Marca como desactualizado cualquier proyecto cuyo repo tenga commits después de la última publicación**, aunque los cambios vengan de tu IDE, de un PR o de otra persona.
+- **Muestra cuántos commits faltan** y el mensaje del más reciente (pasa el cursor para ver la lista).
+- **Avisa cuando GitHub va adelante de Lovable**: el push todavía no se sincronizó, así que publicar no lo incluiría. En ese caso hay que esperar a que Lovable sincronice (o empujar un commit nuevo a la rama sincronizada, ver la [guía de Lovable](https://docs.lovable.dev/integrations/github)).
+
+El token solo necesita lectura: un [fine-grained token](https://github.com/settings/personal-access-tokens/new) con los permisos **Contents: Read** y **Metadata: Read** sobre los repos (incluye las organizaciones donde estén), o un token clásico con el scope `repo`. Se guarda en el Llavero.
+
+Si un proyecto se vinculó por nombre o a mano y ya tenía registro de publicación previo, Loveploy empieza a seguir su repo desde la siguiente publicación.
+
+### Primera vez
+
 La primera vez todos los proyectos publicados aparecen como **Sin registro**. Puedes publicarlos todos una vez (las publicaciones no consumen créditos de IA) o, si sabes que ya están al día, usar **Ajustes → Marcar todos los «Sin registro» como al día**. También puedes hacerlo proyecto por proyecto con clic derecho.
 
 Si editas un proyecto desde Lovable y lo publicas ahí mismo, Loveploy lo seguirá viendo como desactualizado. Usa clic derecho → **Marcar como al día**.
@@ -60,10 +75,10 @@ La lista se actualiza sola cada 15 minutos y cada vez que abres el menú. En Aju
 ## Estructura
 
 ```
-Sources/LoveployCore/   Cliente de la API de Lovable, estado y lógica de despliegue (también compila en Linux)
+Sources/LoveployCore/   Clientes de Lovable y GitHub, estado y lógica de despliegue (también compila en Linux)
 Sources/Loveploy/       App SwiftUI de barra de menú (MenuBarExtra)
 Tests/                  Pruebas del núcleo: swift test
 scripts/build-app.sh    Arma Loveploy.app
 ```
 
-API usada (versión `2026-09-11`): `GET /v1/workspaces`, `GET /v1/projects`, `GET /v1/projects/{id}`, `POST /v1/projects/{id}/publish` y `GET /v1/projects/{id}/publish/{deployment_id}`. Ver la [referencia de la API de Lovable](https://docs.lovable.dev/api-reference/introduction).
+API usada (versión `2026-09-11`): `GET /v1/workspaces`, `GET /v1/projects`, `GET /v1/projects/{id}`, `POST /v1/projects/{id}/publish` y `GET /v1/projects/{id}/publish/{deployment_id}`. De GitHub: GraphQL `viewer.repositories` (repos con el último commit de su rama principal), `GET /repos/{repo}/commits/{rama}` y `GET /repos/{repo}/compare/{base}...{head}`. Ver la [referencia de la API de Lovable](https://docs.lovable.dev/api-reference/introduction).

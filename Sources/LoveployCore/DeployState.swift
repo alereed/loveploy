@@ -23,14 +23,25 @@ public enum DeployState: String, Sendable, CaseIterable {
         }
     }
 
+    /// - Parameters:
+    ///   - githubHeadSha: head of the linked GitHub branch, when there is one.
+    ///   - sharesCommits: whether Lovable and the repo use the same commit SHAs
+    ///     (true once Lovable's latest commit was seen in the repo).
     public static func evaluate(
         isPublished: Bool,
         latestCommitSha: String?,
         lastEditedAt: Date?,
-        record: PublishRecord?
+        record: PublishRecord?,
+        githubHeadSha: String? = nil,
+        sharesCommits: Bool = false
     ) -> DeployState {
         guard isPublished else { return .unpublished }
         guard let record else { return .unknown }
+        if let githubHeadSha,
+           let publishedOnGitHub = record.githubSha ?? (sharesCommits ? record.commitSha : nil),
+           publishedOnGitHub != githubHeadSha {
+            return .outdated
+        }
         if let latest = latestCommitSha, let published = record.commitSha {
             return latest == published ? .upToDate : .outdated
         }
@@ -39,6 +50,32 @@ public enum DeployState: String, Sendable, CaseIterable {
             return .outdated
         }
         return .upToDate
+    }
+}
+
+/// What GitHub says about a project's linked repo.
+public struct GitHubStatus: Hashable, Sendable {
+    public let link: RepoLink
+    public let repoURL: String?
+    public let head: GitHubCommit?
+    /// Commits on GitHub since the published version, newest first. nil when unknown.
+    public let newCommits: [GitHubCommit]?
+    public let error: String?
+
+    public init(link: RepoLink, repoURL: String?, head: GitHubCommit?, newCommits: [GitHubCommit]? = nil, error: String? = nil) {
+        self.link = link
+        self.repoURL = repoURL
+        self.head = head
+        self.newCommits = newCommits
+        self.error = error
+    }
+
+    public var sharesCommits: Bool { link.source == .commit }
+
+    /// GitHub has commits Lovable hasn't pulled yet, so publishing won't include them.
+    public func lovableIsBehind(latestCommitSha: String?) -> Bool {
+        guard sharesCommits, let head, let latestCommitSha else { return false }
+        return head.sha != latestCommitSha
     }
 }
 
@@ -51,6 +88,7 @@ public struct ProjectRow: Identifiable, Hashable, Sendable {
     public let record: PublishRecord?
     /// Index of the API key that can reach this project.
     public let keyIndex: Int
+    public let github: GitHubStatus?
 
     public init(
         summary: ProjectSummary,
@@ -58,7 +96,8 @@ public struct ProjectRow: Identifiable, Hashable, Sendable {
         latestCommitSha: String?,
         previewUrl: String? = nil,
         record: PublishRecord?,
-        keyIndex: Int = 0
+        keyIndex: Int = 0,
+        github: GitHubStatus? = nil
     ) {
         self.summary = summary
         self.workspaceName = workspaceName
@@ -66,6 +105,7 @@ public struct ProjectRow: Identifiable, Hashable, Sendable {
         self.previewUrl = previewUrl
         self.record = record
         self.keyIndex = keyIndex
+        self.github = github
     }
 
     public var id: String { summary.id }
@@ -75,7 +115,9 @@ public struct ProjectRow: Identifiable, Hashable, Sendable {
             isPublished: summary.isPublished,
             latestCommitSha: latestCommitSha,
             lastEditedAt: summary.lastEditedAt,
-            record: record
+            record: record,
+            githubHeadSha: github?.head?.sha,
+            sharesCommits: github?.sharesCommits ?? false
         )
     }
 }
@@ -101,7 +143,18 @@ extension ProjectRow {
             latestCommitSha: latestCommitSha,
             previewUrl: previewUrl,
             record: record,
-            keyIndex: keyIndex
+            keyIndex: keyIndex,
+            github: github.map {
+                // Commits since the publish are no longer new once it's republished.
+                GitHubStatus(link: $0.link, repoURL: $0.repoURL, head: $0.head, newCommits: record == nil ? $0.newCommits : [], error: $0.error)
+            }
         )
+    }
+
+    /// The GitHub SHA that represents what a publish right now would put live.
+    /// With shared SHAs that's Lovable's commit (GitHub may be ahead of it).
+    public var githubShaForPublish: String? {
+        guard let github else { return nil }
+        return github.sharesCommits ? (latestCommitSha ?? github.head?.sha) : github.head?.sha
     }
 }

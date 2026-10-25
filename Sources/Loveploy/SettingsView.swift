@@ -7,12 +7,17 @@ struct SettingsView: View {
     @State private var key = ""
     @State private var isAdding = false
     @State private var addError: String?
+    @State private var githubToken = ""
+    @State private var isConnecting = false
+    @State private var githubError: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             keysSection
             Divider()
             addKeySection
+            Divider()
+            githubSection
             Divider()
             preferencesSection
         }
@@ -68,6 +73,43 @@ struct SettingsView: View {
         .textFieldStyle(.roundedBorder)
     }
 
+    private var githubSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("GitHub").font(.subheadline.bold())
+            if model.hasGitHub {
+                HStack {
+                    Label(model.githubLogin.map { "Conectado como @\($0)" } ?? "Conectado", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                    Spacer()
+                    Button("Desconectar", role: .destructive) { model.disconnectGitHub() }
+                        .buttonStyle(.borderless)
+                }
+                Text("\(model.githubRepos.count) repos visibles. Los proyectos se vinculan solos por commit o por nombre; cámbialos con clic derecho.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text("Conecta GitHub para detectar cambios en los repos sincronizados con Lovable y ver qué commits faltan por publicar.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                SecureField("Token de GitHub (github_pat_… o ghp_…)", text: $githubToken)
+                    .textFieldStyle(.roundedBorder)
+                if let githubError {
+                    Text(githubError).font(.caption).foregroundStyle(.red)
+                }
+                HStack {
+                    Link("Crear un token", destination: URL(string: "https://github.com/settings/personal-access-tokens/new")!)
+                        .font(.caption)
+                    Spacer()
+                    Button("Conectar") { connectGitHub() }
+                        .disabled(githubToken.trimmingCharacters(in: .whitespaces).isEmpty || isConnecting)
+                }
+                Text("Solo lectura: permisos «Contents» y «Metadata» en los repos (o el scope «repo» en un token clásico).")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
     private var preferencesSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Toggle("Abrir al iniciar sesión", isOn: Binding(
@@ -83,6 +125,20 @@ struct SettingsView: View {
                 model.resetExclusions()
             }
             .disabled(model.state.excluded.isEmpty)
+        }
+    }
+
+    private func connectGitHub() {
+        isConnecting = true
+        githubError = nil
+        Task {
+            do {
+                try await model.connectGitHub(token: githubToken)
+                githubToken = ""
+            } catch {
+                githubError = error.localizedDescription
+            }
+            isConnecting = false
         }
     }
 

@@ -13,12 +13,33 @@ struct APIKeyEntry: Codable, Identifiable, Hashable {
     }
 }
 
-/// Stores the API keys as a single JSON item in the login Keychain.
+/// Stores secrets in the login Keychain: the Lovable API keys (as one JSON item) and the GitHub token.
 enum Keychain {
     private static let service = "mx.blender.loveploy"
-    private static let account = "api-keys"
 
-    private static var baseQuery: [String: Any] {
+    static func loadKeys() -> [APIKeyEntry] {
+        guard let data = load(account: "api-keys") else { return [] }
+        return (try? JSONDecoder().decode([APIKeyEntry].self, from: data)) ?? []
+    }
+
+    static func saveKeys(_ keys: [APIKeyEntry]) {
+        guard let data = try? JSONEncoder().encode(keys) else { return }
+        save(data, account: "api-keys")
+    }
+
+    static func loadGitHubToken() -> String? {
+        load(account: "github-token").map { String(decoding: $0, as: UTF8.self) }
+    }
+
+    static func saveGitHubToken(_ token: String?) {
+        if let token {
+            save(Data(token.utf8), account: "github-token")
+        } else {
+            SecItemDelete(query(account: "github-token") as CFDictionary)
+        }
+    }
+
+    private static func query(account: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -26,27 +47,23 @@ enum Keychain {
         ]
     }
 
-    static func loadKeys() -> [APIKeyEntry] {
-        var query = baseQuery
-        query[kSecReturnData as String] = true
-        query[kSecMatchLimit as String] = kSecMatchLimitOne
+    private static func load(account: String) -> Data? {
+        var request = query(account: account)
+        request[kSecReturnData as String] = true
+        request[kSecMatchLimit as String] = kSecMatchLimitOne
         var result: AnyObject?
-        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
-              let data = result as? Data else {
-            return []
-        }
-        return (try? JSONDecoder().decode([APIKeyEntry].self, from: data)) ?? []
+        guard SecItemCopyMatching(request as CFDictionary, &result) == errSecSuccess else { return nil }
+        return result as? Data
     }
 
-    static func saveKeys(_ keys: [APIKeyEntry]) {
-        guard let data = try? JSONEncoder().encode(keys) else { return }
+    private static func save(_ data: Data, account: String) {
         let attributes: [String: Any] = [kSecValueData as String: data]
-        let status = SecItemUpdate(baseQuery as CFDictionary, attributes as CFDictionary)
+        let status = SecItemUpdate(query(account: account) as CFDictionary, attributes as CFDictionary)
         if status == errSecItemNotFound {
-            var query = baseQuery
-            query[kSecValueData as String] = data
-            query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
-            SecItemAdd(query as CFDictionary, nil)
+            var item = query(account: account)
+            item[kSecValueData as String] = data
+            item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
+            SecItemAdd(item as CFDictionary, nil)
         }
     }
 }
