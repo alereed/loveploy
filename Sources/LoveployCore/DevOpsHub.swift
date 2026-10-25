@@ -80,12 +80,16 @@ public struct HubApp: Decodable, Hashable, Sendable, Identifiable {
     public let iosPendienteDesde: String?
     public let iosPendienteMensaje: String?
     public let faltantes: [Missing]?
+    public let android: Bool?
+    public let androidPackage: String?
+    public let playStore: Store?
 
     public init(
         slug: String, nombre: String?, ios: Bool? = true, repoOwner: String?, repoName: String?, repoBranch: String? = "main",
         iosBundleId: String? = nil, appStore: Store? = nil, deploy: Deploy? = nil,
         iosCompiladoCommit: String? = nil, iosPendienteCommit: String? = nil, iosPendienteDesde: String? = nil,
-        iosPendienteMensaje: String? = nil, faltantes: [Missing]? = nil
+        iosPendienteMensaje: String? = nil, faltantes: [Missing]? = nil,
+        android: Bool? = nil, androidPackage: String? = nil, playStore: Store? = nil
     ) {
         self.slug = slug
         self.nombre = nombre
@@ -101,6 +105,9 @@ public struct HubApp: Decodable, Hashable, Sendable, Identifiable {
         self.iosPendienteDesde = iosPendienteDesde
         self.iosPendienteMensaje = iosPendienteMensaje
         self.faltantes = faltantes
+        self.android = android
+        self.androidPackage = androidPackage
+        self.playStore = playStore
     }
 
     public var id: String { slug }
@@ -126,6 +133,13 @@ public struct HubApp: Decodable, Hashable, Sendable, Identifiable {
     }
 
     public var needsTestFlight: Bool { testFlight == .pending || testFlight == .failed }
+
+    public var hasAndroid: Bool { (android ?? false) && androidPackage != nil }
+
+    /// The App Store version can take a build and go to review (it isn't already in review).
+    public var canSubmitForReview: Bool {
+        ["en_preparacion", "rechazado"].contains(appStore?.estado ?? "")
+    }
 
     /// Same repo as a Lovable project's git sync. Repos move between owners (a user to an
     /// organization), so the repo name decides and the owner only breaks ties.
@@ -221,7 +235,24 @@ public struct DevOpsHub: Sendable {
     /// Same path as the portal's button: iOS beta goes through Xcode Cloud to TestFlight.
     /// It costs Mac hours, so callers must ask the user first.
     public func requestTestFlight(app slug: String) async throws -> String {
-        let data = try await callTool("build_disparar", arguments: ["app": slug, "plataforma": "ios", "canal": "beta"])
+        try await build(app: slug, platform: "ios", channel: "beta")
+    }
+
+    /// Android build through the hub (GitHub Actions on Linux). `channel`: beta or production.
+    public func requestAndroid(app slug: String, channel: String = "beta") async throws -> String {
+        try await build(app: slug, platform: "android", channel: channel)
+    }
+
+    /// Attaches the newest VALID build to the App Store version in preparation, then sends it
+    /// to Apple's review. Public and irreversible: callers must get explicit confirmation.
+    public func submitForReview(app slug: String) async throws -> String {
+        let attached = try await callTool("version_adjuntar_build", arguments: ["app": slug])
+        let submitted = try await callTool("enviar_a_revision", arguments: ["app": slug, "confirmar": true])
+        return [attached, submitted].map { String(decoding: $0, as: UTF8.self) }.joined(separator: "\n")
+    }
+
+    private func build(app slug: String, platform: String, channel: String) async throws -> String {
+        let data = try await callTool("build_disparar", arguments: ["app": slug, "plataforma": platform, "canal": channel])
         return String(decoding: data, as: UTF8.self)
     }
 

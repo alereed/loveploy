@@ -29,6 +29,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var testFlightRequests: [String: TestFlightRequest] = [:]
     /// iOS apps in the Blender Dev Apps catalog, once connected.
     @Published private(set) var hubAppCount: Int?
+    /// Result of the last App Store / Android action per app slug.
+    @Published private(set) var hubNotices: [String: String] = [:]
+    /// What Turbo asks TestFlight for when TestFlight is automatic.
+    @Published private(set) var testFlightAutopilot: TestFlightAutopilot
     /// What Turbo is waiting on; published so the menu can show when each project goes out.
     @Published private(set) var turboPlanner: TurboPlanner
     @Published var filter: Filter = .pending
@@ -60,6 +64,7 @@ final class AppModel: ObservableObject {
         let state = store.load()
         self.state = state
         turboPlanner = TurboPlanner(settleDelay: TimeInterval(state.turboDelayMinutes * 60))
+        testFlightAutopilot = TestFlightAutopilot(settleDelay: TimeInterval(state.turboDelayMinutes * 60))
 
         scheduleRefreshTimer()
         Task { await refresh() }
@@ -358,8 +363,21 @@ final class AppModel: ObservableObject {
 
     /// Asks the hub for TestFlight builds (Xcode Cloud). It costs Mac hours and has a daily
     /// limit, so it always asks first and says how many went out today.
-    func requestTestFlight(_ apps: [HubApp]) {
+    /// TestFlight runs without asking and without the daily limit.
+    var testFlightAutomatic: Bool {
+        get { state.testFlightAutomatic }
+        set {
+            state.testFlightAutomatic = newValue
+            save()
+            if newValue { runTurbo() }
+        }
+    }
+
+    func requestTestFlight(_ apps: [HubApp], automatic: Bool = false) {
         guard let hub, !apps.isEmpty else { return }
+        // Mark them now, so the next Turbo pass doesn't ask for the same commit again.
+        for app in apps { testFlightAutopilot.recordRequest(app) }
+        let ask = !state.testFlightAutomatic && !automatic
         let github = githubToken.map { GitHubClient(token: $0) }
         let repos = Dictionary(rows.flatMap { row in row.hub.map { ($0.slug, row.git?.repo) } }, uniquingKeysWith: { first, _ in first })
 
@@ -374,7 +392,9 @@ final class AppModel: ObservableObject {
                     }
                 }
             }
-            guard confirmTestFlight(apps, today: today, checks: checks) else { return }
+            if ask {
+                guard confirmTestFlight(apps, today: today, checks: checks) else { return }
+            }
 
             for app in apps {
                 testFlightRequests[app.slug] = .sending
@@ -386,8 +406,55 @@ final class AppModel: ObservableObject {
                 }
             }
             let sent = apps.filter { testFlightRequests[$0.slug] == .sent }.map(\.label)
-            notify(title: "TestFlight pedido", body: sent.isEmpty ? "No se pudo pedir ningún build." : sent.joined(separator: ", "))
+            notify(
+                title: automatic ? "⚡ Turbo pidió TestFlight" : "TestFlight pedido",
+                body: sent.isEmpty ? "No se pudo pedir ningún build." : sent.joined(separator: ", ")
+            )
             await refresh()
+        }
+    }
+
+    /// Attaches the newest valid build and sends the App Store version to Apple's review.
+    /// Public and irreversible, so it always asks, whatever the TestFlight setting.
+    func submitForReview(_ app: HubApp) {
+        guard let hub else { return }
+        let alert = NSAlert()
+        alert.messageText = "¿Enviar \(app.label) a revisión de App Store?"
+        alert.informativeText = """
+        Se adjunta el build válido más reciente a la versión \(app.appStore?.version ?? "") y se envía a Apple.
+        Es público y no se puede deshacer desde aquí.
+        """
+        alert.alertStyle = .critical
+        alert.addButton(withTitle: "Enviar a revisión")
+        alert.addButton(withTitle: "Cancelar")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        hubNotices[app.slug] = "Enviando a revisión…"
+        Task {
+            do {
+                _ = try await hub.submitForReview(app: app.slug)
+                hubNotices[app.slug] = "Enviada a revisión de Apple"
+                notify(title: "App Store: \(app.label)", body: "Enviada a revisión.")
+            } catch {
+                hubNotices[app.slug] = "No se pudo enviar a revisión: \(error.localizedDescription)"
+            }
+            await refresh()
+        }
+    }
+
+    /// Android build through the hub (beta track of Google Play).
+    func requestAndroid(_ app: HubApp) {
+        guard let hub else { return }
+        hubNotices[app.slug] = "Pidiendo build de Android…"
+        Task {
+            do {
+                _ = try await hub.requestAndroid(app: app.slug)
+                hubNotices[app.slug] = "Build de Android pedido"
+                notify(title: "Android: \(app.label)", body: "Build pedido a Blender Dev Apps.")
+            } catch {
+                hubNotices[app.slug] = "No se pudo pedir Android: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -528,6 +595,7 @@ final class AppModel: ObservableObject {
         set {
             state.turboDelayMinutes = newValue
             turboPlanner.settleDelay = TimeInterval(newValue * 60)
+            testFlightAutopilot.settleDelay = TimeInterval(newValue * 60)
             save()
             runTurbo()
         }
@@ -544,9 +612,17 @@ final class AppModel: ObservableObject {
     }
 
     private func runTurbo() {
-        guard state.turbo, isSignedIn, !isDeploying else { return }
-        let ready = turboPlanner.ready(rows: rows, excluded: state.excluded, now: Date())
-        deploy(ready, automatic: true)
+        guard state.turbo, isSignedIn else { return }
+        if !isDeploying {
+            let ready = turboPlanner.ready(rows: rows, excluded: state.excluded, now: Date())
+            deploy(ready, automatic: true)
+        }
+        if state.testFlightAutomatic, hasHub {
+            let apps = rows.filter { !state.excluded.contains($0.id) }.flatMap(\.hub)
+            let unique = Dictionary(apps.map { ($0.slug, $0) }, uniquingKeysWith: { first, _ in first }).values
+            let ready = testFlightAutopilot.ready(apps: Array(unique), now: Date())
+            requestTestFlight(ready, automatic: true)
+        }
     }
 
     private func scheduleRefreshTimer() {

@@ -8,11 +8,15 @@ public struct LoveployState: Codable, Equatable, Sendable {
     public var turbo: Bool = false
     /// How long a project's changes must stay the same before Turbo publishes it.
     public var turboDelayMinutes: Int = 5
+    /// TestFlight through Blender Dev Apps: ask every time (with the daily limit), or let
+    /// Turbo request it on its own with no limit.
+    public var testFlightAutomatic: Bool = false
 
-    public init(excluded: Set<String> = [], turbo: Bool = false, turboDelayMinutes: Int = 5) {
+    public init(excluded: Set<String> = [], turbo: Bool = false, turboDelayMinutes: Int = 5, testFlightAutomatic: Bool = false) {
         self.excluded = excluded
         self.turbo = turbo
         self.turboDelayMinutes = turboDelayMinutes
+        self.testFlightAutomatic = testFlightAutomatic
     }
 
     // Tolerates files written by other versions.
@@ -21,6 +25,7 @@ public struct LoveployState: Codable, Equatable, Sendable {
         excluded = (try? container.decodeIfPresent(Set<String>.self, forKey: .excluded)) ?? []
         turbo = (try? container.decodeIfPresent(Bool.self, forKey: .turbo)) ?? false
         turboDelayMinutes = (try? container.decodeIfPresent(Int.self, forKey: .turboDelayMinutes)) ?? 5
+        testFlightAutomatic = (try? container.decodeIfPresent(Bool.self, forKey: .testFlightAutomatic)) ?? false
     }
 }
 

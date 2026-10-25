@@ -187,7 +187,7 @@ struct MenuView: View {
                 .buttonStyle(.borderedProminent)
                 .disabled(!model.hasHub || model.testFlightCandidates.isEmpty)
                 .help(model.hasHub
-                    ? "Pide a Blender Dev Apps (Xcode Cloud) TestFlight de las apps con cambios nativos sin compilar. Siempre pregunta antes."
+                    ? "Pide a Blender Dev Apps TestFlight de las apps con cambios nativos sin compilar."
                     : "Conecta Blender Dev Apps en Ajustes para pedir TestFlight")
             } else {
             Button {
@@ -212,7 +212,8 @@ struct MenuView: View {
 
     private var testFlightTitle: String {
         let count = model.testFlightCandidates.count
-        return count == 1 ? "Pedir 1 TestFlight…" : "Pedir \(count) TestFlight…"
+        let dots = model.testFlightAutomatic ? "" : "…"
+        return count == 1 ? "Pedir 1 TestFlight\(dots)" : "Pedir \(count) TestFlight\(dots)"
     }
 
     private var publishTitle: String {
@@ -261,7 +262,13 @@ struct ProjectRowView: View {
                     IOSLine(ios: ios)
                 }
                 ForEach(row.hub) { app in
-                    HubLine(app: app, request: model.testFlightRequests[app.slug], showName: row.hub.count > 1 || app.label != row.summary.label)
+                    HubLine(
+                        app: app,
+                        request: model.testFlightRequests[app.slug],
+                        notice: model.hubNotices[app.slug],
+                        automatic: model.turbo && model.testFlightAutomatic && model.testFlightAutopilot.wasRequested(app),
+                        showName: row.hub.count > 1 || app.label != row.summary.label
+                    )
                 }
             }
             Spacer(minLength: 4)
@@ -339,8 +346,14 @@ struct ProjectRowView: View {
         if model.hasHub, !row.hub.isEmpty {
             Divider()
             ForEach(row.hub) { app in
-                Button("Pedir TestFlight de \(app.label) (Xcode Cloud)…") { model.requestTestFlight([app]) }
+                Button("Pedir TestFlight de \(app.label)\(model.testFlightAutomatic ? "" : "…")") { model.requestTestFlight([app]) }
                     .disabled(model.testFlightRequests[app.slug] == .sending || app.testFlight == .building)
+                if app.canSubmitForReview {
+                    Button("Enviar \(app.label) a revisión de App Store…") { model.submitForReview(app) }
+                }
+                if app.hasAndroid {
+                    Button("Compilar Android de \(app.label)") { model.requestAndroid(app) }
+                }
             }
         }
         Divider()
@@ -474,6 +487,9 @@ struct IOSLine: View {
 struct HubLine: View {
     let app: HubApp
     let request: AppModel.TestFlightRequest?
+    let notice: String?
+    /// Turbo already asked for this pending commit.
+    let automatic: Bool
     let showName: Bool
 
     var body: some View {
@@ -489,6 +505,16 @@ struct HubLine: View {
                     Text("\(prefix)App Store \(store.label) \(store.estadoLabel)").lineLimit(1)
                 }
                 .foregroundStyle(store.estado == "rechazado" ? Color.red : Color.secondary)
+            }
+            if let play = app.playStore {
+                HStack(spacing: 4) {
+                    Image(systemName: "play.fill")
+                    Text("\(prefix)Google Play \(play.label) \(play.estadoLabel)").lineLimit(1)
+                }
+                .foregroundStyle(.secondary)
+            }
+            if let notice {
+                Text(notice).lineLimit(2).foregroundStyle(.blue)
             }
         }
         .font(.caption2)
@@ -525,6 +551,8 @@ struct HubLine: View {
         switch app.testFlight {
         case .upToDate:
             return "\(prefix)TestFlight al día con los cambios nativos"
+        case .pending where automatic:
+            return "\(prefix)⚡ Turbo ya pidió TestFlight de este cambio"
         case .pending:
             let since = app.iosPendienteDesde.flatMap(parseDate).map { " desde \($0.formatted(.relative(presentation: .named)))" } ?? ""
             let message = app.iosPendienteMensaje.map { ": «\($0)»" } ?? ""

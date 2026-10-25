@@ -40,12 +40,15 @@ Por cada app se ve lo mismo que el tablero de `/dev` (`panel_salud`):
 - **TestFlight al día** o **desactualizado desde …: «mensaje del commit»**, cuando hay cambios nativos que ningún build exitoso incluye (`ios_pendiente_commit`). Los cambios solo web no cuentan. También si Xcode Cloud está compilando o si el último build falló.
 - **App Store**: versión, build y estado (en la App Store, esperando revisión, en preparación, rechazada).
 
-**Pedir TestFlight** (clic derecho → *Pedir TestFlight de … (Xcode Cloud)…*, o en la pestaña iOS *Pedir N TestFlight…*) usa `build_disparar`, el mismo camino que el botón del portal. Como cuesta horas de Xcode Cloud, Loveploy **siempre pregunta antes** y muestra:
+**Pedir TestFlight** (clic derecho → *Pedir TestFlight de …*, o en la pestaña iOS *Pedir N TestFlight*) usa `build_disparar`, el mismo camino que el botón del portal. En Ajustes eliges cómo:
 
-- cuántos builds de Xcode Cloud van hoy del tope de 7, y avisa si con estos se pasa;
-- con un token de GitHub, si los checks del commit pendiente (por ejemplo el del Mac mini) están en verde, rojos o sin correr.
+- **Preguntar siempre (tope 7/día)**: antes de pedir muestra cuántos builds van hoy del tope de 7 (y avisa si se pasa) y, con un token de GitHub, si los checks del commit pendiente están en verde.
+- **Automático con Turbo, sin tope**: con Turbo activo, Loveploy pide TestFlight solo en cuanto una app tiene cambios nativos sin compilar que ya llevan el tiempo de Turbo sin moverse. Pide una vez por cambio; si ese build falla, espera al siguiente cambio.
 
-Turbo nunca pide TestFlight por su cuenta. Los envíos a revisión de la App Store se siguen haciendo desde el portal.
+También desde el clic derecho de cada app:
+
+- **Enviar a revisión de App Store…**: adjunta el build válido más reciente a la versión en preparación (`version_adjuntar_build`) y la envía (`enviar_a_revision`). Es público e irreversible, así que **siempre pregunta**, aunque TestFlight sea automático. Solo aparece cuando la versión está en preparación o rechazada.
+- **Compilar Android**: pide el build de Android (`build_disparar`, canal beta).
 
 ## Cómo sabe qué está desactualizado
 
@@ -86,7 +89,7 @@ Loveploy no usa la API pública ni el MCP de Lovable. Hace lo mismo que la pági
 | Builds de iOS (commit de cada subida) | `GET /projects/{id}/build-runs?flow=manual&target=ios` |
 | Versiones en TestFlight / App Store | `GET /projects/{id}/mobile-publish/store-builds` |
 
-Con Blender Dev Apps habla por su MCP, con la URL y la llave que pones en Ajustes: `panel_salud`, `builds_recientes` y `build_disparar`.
+Con Blender Dev Apps habla por su MCP, con la URL y la llave que pones en Ajustes: `panel_salud`, `builds_recientes`, `build_disparar`, `version_adjuntar_build` y `enviar_a_revision`.
 
 Estos endpoints son internos de la web de Lovable, no una API documentada. Si Lovable los cambia, Loveploy puede dejar de funcionar hasta que se actualice.
 

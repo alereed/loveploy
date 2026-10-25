@@ -85,7 +85,16 @@ struct SettingsView: View {
                     Button("Desconectar", role: .destructive) { model.disconnectHub() }
                         .buttonStyle(.borderless)
                 }
-                Text("TestFlight va por Xcode Cloud, como el botón del portal. Siempre pregunta antes y muestra cuántos van del tope de 7 al día. Turbo nunca lo pide solo.")
+                Picker("TestFlight", selection: Binding(
+                    get: { model.testFlightAutomatic },
+                    set: { model.testFlightAutomatic = $0 }
+                )) {
+                    Text("Preguntar siempre (tope 7/día)").tag(false)
+                    Text("Automático con Turbo, sin tope").tag(true)
+                }
+                Text(model.testFlightAutomatic
+                    ? "Con Turbo activo, pide TestFlight solo cuando hay cambios nativos sin compilar que ya llevan el tiempo de Turbo sin moverse, una vez por cambio. Enviar a revisión de App Store siempre pregunta."
+                    : "Antes de pedir TestFlight muestra cuántos van hoy del tope de 7 y el estado de los checks. Enviar a revisión de App Store siempre pregunta.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             } else {

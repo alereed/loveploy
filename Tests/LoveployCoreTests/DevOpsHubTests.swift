@@ -127,3 +127,60 @@ final class DevOpsHubTests: XCTestCase {
         XCTAssertNil(DevOpsHub.jsonRPCMessage(from: Data("hola".utf8)))
     }
 }
+
+final class TestFlightAutopilotTests: XCTestCase {
+    let t0 = Date(timeIntervalSince1970: 2_000_000)
+
+    func app(_ slug: String, pending: String?, building: Bool = false) -> HubApp {
+        HubApp(
+            slug: slug, nombre: slug, repoOwner: "acme", repoName: slug, iosBundleId: "com.example.\(slug)",
+            deploy: building ? .init(estado: "disparado", startedAt: "x") : nil,
+            iosCompiladoCommit: "old", iosPendienteCommit: pending
+        )
+    }
+
+    func testAsksOncePerPendingCommitAfterItSettles() {
+        var pilot = TestFlightAutopilot(settleDelay: 300)
+        XCTAssertTrue(pilot.ready(apps: [app("uno", pending: "c1")], now: t0).isEmpty)
+        let ready = pilot.ready(apps: [app("uno", pending: "c1")], now: t0 + 300)
+        XCTAssertEqual(ready.map(\.slug), ["uno"])
+        pilot.recordRequest(ready[0])
+        XCTAssertTrue(pilot.wasRequested(app("uno", pending: "c1")))
+        // Same commit (even if that build failed): not again.
+        XCTAssertTrue(pilot.ready(apps: [app("uno", pending: "c1")], now: t0 + 900).isEmpty)
+        // Built, then a new native change: asked again once it settles.
+        XCTAssertTrue(pilot.ready(apps: [app("uno", pending: nil)], now: t0 + 1000).isEmpty)
+        XCTAssertTrue(pilot.ready(apps: [app("uno", pending: "c2")], now: t0 + 1100).isEmpty)
+        XCTAssertEqual(pilot.ready(apps: [app("uno", pending: "c2")], now: t0 + 1400).map(\.slug), ["uno"])
+    }
+
+    func testSkipsAppsAlreadyBuildingOrUpToDate() {
+        var pilot = TestFlightAutopilot(settleDelay: 0)
+        let apps = [app("uno", pending: "c1", building: true), app("dos", pending: nil), app("tres", pending: "c3")]
+        XCTAssertEqual(pilot.ready(apps: apps, now: t0).map(\.slug), ["tres"])
+    }
+
+    func testSubmitAndAndroidCallTheRightTools() async throws {
+        let transport = MockTransport()
+        var called: [String] = []
+        let lock = NSLock()
+        transport.on("POST", DevOpsHubTests.endpoint.path) { request in
+            let body = (try? JSONSerialization.jsonObject(with: request.httpBody ?? Data())) as? [String: Any]
+            if body?["method"] as? String == "tools/call", let params = body?["params"] as? [String: Any] {
+                lock.lock(); called.append("\(params["name"]!) \(params["arguments"] as? [String: Any] ?? [:])"); lock.unlock()
+                return (200, #"{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"{\"ok\":true}"}]}}"#, [:])
+            }
+            return (200, #"{"jsonrpc":"2.0","id":1,"result":{}}"#, [:])
+        }
+        let hub = DevOpsHub(endpoint: DevOpsHubTests.endpoint, key: "k", transport: transport)
+        _ = try await hub.submitForReview(app: "uno")
+        _ = try await hub.requestAndroid(app: "uno")
+        XCTAssertEqual(called.count, 3)
+        XCTAssertTrue(called[0].hasPrefix("version_adjuntar_build"))
+        XCTAssertTrue(called[1].hasPrefix("enviar_a_revision") && called[1].contains("confirmar"))
+        XCTAssertTrue(called[2].hasPrefix("build_disparar") && called[2].contains("android"))
+        let panelApp = HubApp(slug: "x", nombre: nil, repoOwner: nil, repoName: "x", iosBundleId: "b",
+                              appStore: .init(version: "1.0", build: "3", estado: "en_preparacion"))
+        XCTAssertTrue(panelApp.canSubmitForReview)
+    }
+}
