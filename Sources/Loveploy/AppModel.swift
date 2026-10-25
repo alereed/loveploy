@@ -24,6 +24,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var errors: [String] = []
     @Published private(set) var lastRefresh: Date?
     @Published private(set) var githubLogin: String?
+    /// What Turbo is waiting on; published so the menu can show when each project goes out.
+    @Published private(set) var turboPlanner: TurboPlanner
     @Published var filter: Filter = .pending
     @Published var showingSettings = false
 
@@ -34,6 +36,8 @@ final class AppModel: ObservableObject {
     private var loginWindow: LoginWindowController?
     private var timer: Timer?
     private static let refreshInterval: TimeInterval = 15 * 60
+    /// Turbo checks more often so changes go out soon after they settle.
+    private static let turboRefreshInterval: TimeInterval = 2 * 60
 
     init() {
         let credentials = Keychain.loadCredentials()
@@ -46,11 +50,11 @@ final class AppModel: ObservableObject {
         account = credentials?.email
         isSignedIn = credentials != nil
         githubToken = Keychain.loadGitHubToken()
-        state = store.load()
+        let state = store.load()
+        self.state = state
+        turboPlanner = TurboPlanner(settleDelay: TimeInterval(state.turboDelayMinutes * 60))
 
-        timer = Timer.scheduledTimer(withTimeInterval: Self.refreshInterval, repeats: true) { [weak self] _ in
-            Task { await self?.refresh() }
-        }
+        scheduleRefreshTimer()
         Task { await refresh() }
     }
 
@@ -201,6 +205,7 @@ final class AppModel: ObservableObject {
         rows = newRows.sorted(by: Self.order)
         errors = newErrors
         lastRefresh = Date()
+        runTurbo()
     }
 
     /// `GET /projects/{id}/details` for every project, eight at a time.
@@ -295,17 +300,22 @@ final class AppModel: ObservableObject {
     // MARK: - Deploy
 
     func deploySelected() {
-        let ids = selectedRows.map(\.id)
+        deploy(selectedRows.map(\.id), automatic: false)
+    }
+
+    private func deploy(_ ids: [String], automatic: Bool) {
         guard !ids.isEmpty, !isDeploying else { return }
         isDeploying = true
         progress = [:]
         let client = client
+        // The version each project had when it went out, so Turbo doesn't retry a failed one.
+        let versions = Dictionary(uniqueKeysWithValues: rows.filter { ids.contains($0.id) }.map { ($0.id, TurboPlanner.version(of: $0)) })
 
         Task {
             await Deployer().run(projectIDs: ids, client: client) { [weak self] id, value in
                 await self?.setProgress(value, for: id)
             }
-            finishDeploy()
+            finishDeploy(automatic: automatic, versions: versions)
         }
     }
 
@@ -313,18 +323,82 @@ final class AppModel: ObservableObject {
         progress[id] = value
     }
 
-    private func finishDeploy() {
+    private func finishDeploy(automatic: Bool, versions: [String: String]) {
         isDeploying = false
         overrides = [:]
-        let succeeded = progress.values.filter { if case .completed = $0 { return true } else { return false } }.count
-        let failed = progress.count - succeeded
-        notify(
-            title: failed == 0 ? "Despliegue terminado" : "Despliegue con errores",
-            body: failed == 0
-                ? "\(succeeded) proyecto(s) publicados."
-                : "\(succeeded) publicados, \(failed) con error."
-        )
+        var names: [String] = []
+        var failed = 0
+        for (id, result) in progress {
+            if case .completed = result {
+                if let version = versions[id] {
+                    turboPlanner.recordSuccess(projectID: id, version: version)
+                }
+                names.append(rows.first { $0.id == id }?.summary.label ?? id)
+            } else if let version = versions[id] {
+                turboPlanner.recordFailure(projectID: id, version: version)
+                failed += 1
+            }
+        }
+        let succeeded = names.count
+        let title: String
+        if automatic {
+            title = failed == 0 ? "⚡ Turbo publicó \(succeeded) proyecto(s)" : "⚡ Turbo: \(failed) con error"
+        } else {
+            title = failed == 0 ? "Despliegue terminado" : "Despliegue con errores"
+        }
+        let body = failed == 0
+            ? names.sorted().joined(separator: ", ")
+            : "\(succeeded) publicados, \(failed) con error. Turbo no reintentará esa versión."
+        notify(title: title, body: body)
         Task { await refresh() }
+    }
+
+    // MARK: - Turbo
+
+    var turbo: Bool {
+        get { state.turbo }
+        set {
+            state.turbo = newValue
+            save()
+            scheduleRefreshTimer()
+            if newValue {
+                Task { await refresh() }
+            }
+        }
+    }
+
+    var turboDelayMinutes: Int {
+        get { state.turboDelayMinutes }
+        set {
+            state.turboDelayMinutes = newValue
+            turboPlanner.settleDelay = TimeInterval(newValue * 60)
+            save()
+            runTurbo()
+        }
+    }
+
+    /// When Turbo will publish this project, if it's waiting.
+    func turboPublishDate(for row: ProjectRow) -> Date? {
+        guard state.turbo else { return nil }
+        return turboPlanner.publishDate(for: row, excluded: state.excluded)
+    }
+
+    func turboGaveUp(on row: ProjectRow) -> Bool {
+        state.turbo && turboPlanner.didFail(row)
+    }
+
+    private func runTurbo() {
+        guard state.turbo, isSignedIn, !isDeploying else { return }
+        let ready = turboPlanner.ready(rows: rows, excluded: state.excluded, now: Date())
+        deploy(ready, automatic: true)
+    }
+
+    private func scheduleRefreshTimer() {
+        timer?.invalidate()
+        let interval = state.turbo ? Self.turboRefreshInterval : Self.refreshInterval
+        timer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            Task { await self?.refresh() }
+        }
     }
 
     // MARK: - Helpers

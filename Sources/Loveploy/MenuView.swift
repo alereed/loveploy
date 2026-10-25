@@ -28,6 +28,22 @@ struct MenuView: View {
                 ProgressView().controlSize(.small)
             }
             Spacer()
+            if model.isSignedIn {
+                Button {
+                    model.turbo.toggle()
+                } label: {
+                    Label("Turbo", systemImage: model.turbo ? "bolt.fill" : "bolt.slash")
+                        .labelStyle(.titleAndIcon)
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(Capsule().fill(model.turbo ? Color.yellow.opacity(0.3) : Color.primary.opacity(0.06)))
+                        .foregroundStyle(model.turbo ? Color.orange : Color.secondary)
+                }
+                .help(model.turbo
+                    ? "Turbo activo: publica solo lo desactualizado cuando lleva \(model.turboDelayMinutes) min sin cambios"
+                    : "Activar Turbo: publicar automáticamente lo desactualizado")
+            }
             Button {
                 Task { await model.refresh() }
             } label: {
@@ -237,6 +253,11 @@ struct ProjectRowView: View {
         }
         if row.details?.publishedDeployment?.secretsChanged == true {
             parts.append("cambiaron los secretos")
+        }
+        if model.turboGaveUp(on: row) {
+            parts.append("⚡ falló; Turbo espera un cambio nuevo")
+        } else if let date = model.turboPublishDate(for: row) {
+            parts.append(date <= Date() ? "⚡ se publica ya" : "⚡ se publica \(date.formatted(date: .omitted, time: .shortened))")
         }
         return parts.joined(separator: " · ")
     }

@@ -8,6 +8,18 @@ App de barra de menú para Mac que publica de un clic todos tus proyectos de [Lo
 - Con las casillas eliges cuáles entran a la lista de despliegue. Si quitas uno desactualizado, Loveploy lo recuerda y no lo vuelve a incluir.
 - **Publicar N proyectos** los publica (3 a la vez) igual que el botón Publish / Update de Lovable, muestra el paso en que va cada uno y te avisa con una notificación al terminar.
 
+## ⚡ Turbo: publicar automáticamente
+
+Activa **Turbo** con el botón ⚡ del menú (o en Ajustes) y Loveploy publica solo cada proyecto en cuanto se desactualiza:
+
+- Revisa cada 2 minutos mientras Turbo está activo; el ícono de la barra cambia a un corazón con rayo.
+- **Espera a que los cambios se asienten**: solo publica cuando el proyecto lleva un tiempo sin cambios (5 minutos por defecto; también 0, 2, 10 o 30), para no publicar a medias mientras tú o el agente de Lovable siguen editando. Cada proyecto muestra a qué hora sale.
+- **Respeta las exclusiones**: lo que desmarcaste no se publica solo.
+- **No se cicla**: si una publicación falla, no la reintenta hasta que haya un cambio nuevo, y te avisa con una notificación.
+- No publica proyectos que nunca has publicado; esos siguen siendo manuales.
+
+La Mac tiene que estar encendida con Loveploy abierto; para que arranque solo, activa **Abrir al iniciar sesión en la Mac** en Ajustes.
+
 ## Cómo sabe qué está desactualizado
 
 Usa la misma regla que el botón **Publish** de lovable.dev para ofrecer **Update**. Un proyecto está desactualizado cuando:

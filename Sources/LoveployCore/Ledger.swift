@@ -2,17 +2,25 @@ import Foundation
 
 /// Everything Loveploy persists between launches (the session lives in the Keychain).
 public struct LoveployState: Codable, Equatable, Sendable {
-    /// Projects the user chose to leave out of "Publicar".
+    /// Projects the user chose to leave out of "Publicar" (and of Turbo).
     public var excluded: Set<String> = []
+    /// Turbo mode: publish outdated projects automatically.
+    public var turbo: Bool = false
+    /// How long a project's changes must stay the same before Turbo publishes it.
+    public var turboDelayMinutes: Int = 5
 
-    public init(excluded: Set<String> = []) {
+    public init(excluded: Set<String> = [], turbo: Bool = false, turboDelayMinutes: Int = 5) {
         self.excluded = excluded
+        self.turbo = turbo
+        self.turboDelayMinutes = turboDelayMinutes
     }
 
     // Tolerates files written by other versions.
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         excluded = (try? container.decodeIfPresent(Set<String>.self, forKey: .excluded)) ?? []
+        turbo = (try? container.decodeIfPresent(Bool.self, forKey: .turbo)) ?? false
+        turboDelayMinutes = (try? container.decodeIfPresent(Int.self, forKey: .turboDelayMinutes)) ?? 5
     }
 }
 

@@ -11,6 +11,8 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 14) {
             lovableSection
             Divider()
+            turboSection
+            Divider()
             githubSection
             Divider()
             preferencesSection
@@ -39,6 +41,30 @@ struct SettingsView: View {
                     Button("Iniciar sesión") { model.signIn() }
                 }
             }
+        }
+    }
+
+    private var turboSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Toggle(isOn: Binding(get: { model.turbo }, set: { model.turbo = $0 })) {
+                Label("Turbo: publicar automáticamente", systemImage: "bolt.fill")
+                    .font(.subheadline.bold())
+            }
+            .toggleStyle(.switch)
+            Picker("Publicar cuando lleve sin cambios", selection: Binding(
+                get: { model.turboDelayMinutes },
+                set: { model.turboDelayMinutes = $0 }
+            )) {
+                Text("Al momento").tag(0)
+                Text("2 min").tag(2)
+                Text("5 min").tag(5)
+                Text("10 min").tag(10)
+                Text("30 min").tag(30)
+            }
+            .disabled(!model.turbo)
+            Text("Revisa cada 2 minutos y publica los proyectos desactualizados que no excluiste, cuando ya no están cambiando. Si una publicación falla, no la reintenta hasta que haya un cambio nuevo.")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
         }
     }
 
