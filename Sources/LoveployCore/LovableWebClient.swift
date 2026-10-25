@@ -74,6 +74,24 @@ public struct LovableWebClient: Sendable {
         try await request("GET", "/workspaces/\(workspaceID)/projects/\(projectID)/gitsync/sync-status")
     }
 
+    /// Manual build runs that target iOS (uploads to App Store Connect / TestFlight), newest first.
+    public func iosBuildRuns(projectID: String, limit: Int = 10) async throws -> [BuildRun] {
+        let page: BuildRunPage = try await request("GET", "/projects/\(projectID)/build-runs", query: [
+            URLQueryItem(name: "limit", value: String(limit)),
+            URLQueryItem(name: "flow", value: "manual"),
+            URLQueryItem(name: "target", value: "ios"),
+        ])
+        return (page.runs ?? []).filter(\.includesIOS)
+    }
+
+    /// Store uploads and their state at Apple / Google.
+    public func storeBuilds(projectID: String, limit: Int = 20) async throws -> [StoreBuild] {
+        let response: StoreBuildsResponse = try await request("GET", "/projects/\(projectID)/mobile-publish/store-builds", query: [
+            URLQueryItem(name: "limit", value: String(limit)),
+        ])
+        return response.builds ?? []
+    }
+
     // MARK: - Plumbing
 
     private func request<T: Decodable>(

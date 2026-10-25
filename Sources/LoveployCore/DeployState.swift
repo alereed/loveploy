@@ -74,14 +74,17 @@ public struct ProjectRow: Identifiable, Hashable, Sendable {
     public let workspace: Workspace
     public let details: ProjectDetails?
     public let git: GitStatus?
+    /// The iOS app, when the project has one.
+    public let ios: IOSStatus?
     /// Why the details couldn't be read, if they couldn't.
     public let error: String?
 
-    public init(summary: ProjectSummary, workspace: Workspace, details: ProjectDetails?, git: GitStatus? = nil, error: String? = nil) {
+    public init(summary: ProjectSummary, workspace: Workspace, details: ProjectDetails?, git: GitStatus? = nil, ios: IOSStatus? = nil, error: String? = nil) {
         self.summary = summary
         self.workspace = workspace
         self.details = details
         self.git = git
+        self.ios = ios
         self.error = error
     }
 
@@ -91,11 +94,15 @@ public struct ProjectRow: Identifiable, Hashable, Sendable {
     public var liveURL: String? { details?.url }
 
     public func with(details: ProjectDetails?) -> ProjectRow {
-        ProjectRow(summary: summary, workspace: workspace, details: details, git: git, error: nil)
+        ProjectRow(summary: summary, workspace: workspace, details: details, git: git, ios: ios, error: nil)
     }
 
     public func with(git: GitStatus?) -> ProjectRow {
-        ProjectRow(summary: summary, workspace: workspace, details: details, git: git, error: error)
+        ProjectRow(summary: summary, workspace: workspace, details: details, git: git, ios: ios, error: error)
+    }
+
+    public func with(ios: IOSStatus?) -> ProjectRow {
+        ProjectRow(summary: summary, workspace: workspace, details: details, git: git, ios: ios, error: error)
     }
 }
 

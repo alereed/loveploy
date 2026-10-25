@@ -127,6 +127,13 @@ struct MenuView: View {
             if model.count(.unknown) > 0 {
                 StateCount(state: .unknown, count: model.count(.unknown))
             }
+            if model.rows.contains(where: { $0.ios != nil }) {
+                HStack(spacing: 4) {
+                    Image(systemName: "iphone")
+                    Text("\(model.iosNeedingUpload) iOS sin subir")
+                }
+                .foregroundStyle(model.iosNeedingUpload > 0 ? Color.orange : Color.secondary)
+            }
         }
         .font(.caption)
     }
@@ -139,6 +146,9 @@ struct MenuView: View {
             } else if model.filter == .pending {
                 Image(systemName: "checkmark.seal.fill").font(.title).foregroundStyle(.green)
                 Text("Todo lo publicado está al día.")
+            } else if model.filter == .ios {
+                Image(systemName: "iphone.slash").font(.title)
+                Text("Ningún proyecto tiene app de iOS en Lovable.")
             } else {
                 Text("No hay proyectos.")
             }
@@ -228,6 +238,9 @@ struct ProjectRowView: View {
                 if let git = row.git {
                     GitLine(row: row, git: git)
                 }
+                if let ios = row.ios {
+                    IOSLine(ios: ios)
+                }
             }
             Spacer(minLength: 4)
             trailing
@@ -296,6 +309,11 @@ struct ProjectRowView: View {
         if let url = row.git?.url.flatMap(URL.init(string:)) {
             Button("Abrir repo en GitHub") { NSWorkspace.shared.open(url) }
         }
+        if row.ios != nil {
+            Button("Abrir App Store Connect") {
+                NSWorkspace.shared.open(URL(string: "https://appstoreconnect.apple.com/apps")!)
+            }
+        }
         Divider()
         Button("Copiar ID del proyecto") {
             NSPasteboard.general.clearContents()
@@ -356,6 +374,70 @@ struct GitLine: View {
             lines.append("Conecta GitHub en Ajustes para ver qué commits faltan.")
         }
         return lines.joined(separator: "\n")
+    }
+}
+
+/// "TestFlight 1.2 (14) al día · App Store 1.1 (12) en vivo, 1.2 (14) en revisión"
+struct IOSLine: View {
+    let ios: IOSStatus
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            HStack(spacing: 4) {
+                Image(systemName: testFlightIcon)
+                Text(testFlightText).lineLimit(2)
+            }
+            .foregroundStyle(testFlightColor)
+            HStack(spacing: 4) {
+                Image(systemName: "applelogo")
+                Text(appStoreText).lineLimit(2)
+            }
+            .foregroundStyle(ios.appStoreBehind ? Color.primary : Color.secondary)
+        }
+        .font(.caption2)
+    }
+
+    private var upload: String { ios.latestUpload.map { " \($0.label)" } ?? "" }
+
+    private var testFlightIcon: String {
+        switch ios.testFlight {
+        case .upToDate: return "airplane"
+        case .uploading: return "arrow.up.circle"
+        case .failed: return "xmark.octagon.fill"
+        case .outdated, .none: return "exclamationmark.triangle.fill"
+        }
+    }
+
+    private var testFlightColor: Color {
+        switch ios.testFlight {
+        case .upToDate: return .secondary
+        case .uploading: return .blue
+        case .failed: return .red
+        case .outdated, .none: return .orange
+        }
+    }
+
+    private var testFlightText: String {
+        switch ios.testFlight {
+        case .upToDate: return "TestFlight\(upload) al día con el último código"
+        case .outdated: return "TestFlight\(upload) desactualizado: falta subir el último código"
+        case .uploading: return "Subiendo a TestFlight…"
+        case .failed: return "Falló la última subida a TestFlight"
+        case .none: return "App de iOS sin subir a TestFlight"
+        }
+    }
+
+    private var appStoreText: String {
+        guard let live = ios.live else {
+            if let latest = ios.latestUpload {
+                return "App Store: sin versión pública · \(latest.label) \(latest.stateLabel)"
+            }
+            return "App Store: sin versión pública"
+        }
+        guard ios.appStoreBehind, let latest = ios.latestUpload else {
+            return "App Store \(live.label) en vivo, al día con TestFlight"
+        }
+        return "App Store \(live.label) en vivo · \(latest.label) \(latest.stateLabel)"
     }
 }
 

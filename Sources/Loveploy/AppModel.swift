@@ -8,6 +8,7 @@ import UserNotifications
 final class AppModel: ObservableObject {
     enum Filter: String, CaseIterable, Identifiable {
         case pending = "Pendientes"
+        case ios = "iOS"
         case all = "Todos"
         var id: String { rawValue }
     }
@@ -72,6 +73,7 @@ final class AppModel: ObservableObject {
     var visibleRows: [ProjectRow] {
         switch filter {
         case .all: return rows
+        case .ios: return rows.filter { $0.ios != nil }
         case .pending: return rows.filter { $0.state.needsDeploy || isSelected($0) || progress[$0.id] != nil || $0.git?.remoteAhead == true }
         }
     }
@@ -198,6 +200,7 @@ final class AppModel: ObservableObject {
 
         var newRows = await loadDetails(for: listed)
         newRows = await attachGit(to: newRows)
+        newRows = await attachIOS(to: newRows)
         if githubToken != nil, githubLogin == nil {
             githubLogin = try? await GitHubClient(token: githubToken!).viewerLogin()
         }
@@ -274,6 +277,34 @@ final class AppModel: ObservableObject {
             }
             return result
         }
+    }
+
+    /// TestFlight and App Store status for projects that build for iOS.
+    private func attachIOS(to rows: [ProjectRow]) async -> [ProjectRow] {
+        let client = client
+        return await withTaskGroup(of: ProjectRow.self) { group in
+            var queue = rows[...]
+            var result: [ProjectRow] = []
+            func startNext() {
+                guard let row = queue.popFirst() else { return }
+                group.addTask {
+                    guard let runs = try? await client.iosBuildRuns(projectID: row.id), !runs.isEmpty else { return row }
+                    let builds = (try? await client.storeBuilds(projectID: row.id)) ?? []
+                    let ios = IOSStatus.evaluate(runs: runs, builds: builds, latestCommitSha: row.details?.latestCommitSha)
+                    return row.with(ios: ios)
+                }
+            }
+            for _ in 0..<8 { startNext() }
+            while let row = await group.next() {
+                result.append(row)
+                startNext()
+            }
+            return result
+        }
+    }
+
+    var iosNeedingUpload: Int {
+        rows.filter { $0.ios?.testFlightNeedsUpload == true }.count
     }
 
     private static func order(_ a: ProjectRow, _ b: ProjectRow) -> Bool {

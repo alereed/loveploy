@@ -290,3 +290,89 @@ public func publishFailureHint(errorClass: String?) -> String? {
     default: return nil
     }
 }
+
+/// A build Lovable ran (`GET /projects/{id}/build-runs`). iOS uploads to App Store
+/// Connect are the manual runs that include the "ios" target.
+public struct BuildRun: Decodable, Hashable, Sendable {
+    public let id: String
+    public let status: String?
+    public let commitSha: String?
+    public let createdAt: String?
+    public let requestedTargets: [String]?
+
+    public init(id: String, status: String?, commitSha: String?, createdAt: String?, requestedTargets: [String]? = ["ios"]) {
+        self.id = id
+        self.status = status
+        self.commitSha = commitSha
+        self.createdAt = createdAt
+        self.requestedTargets = requestedTargets
+    }
+
+    public static let terminalStatuses: Set<String> = ["succeeded", "failed", "cancelled", "timed_out"]
+    public var isFinished: Bool { status.map(Self.terminalStatuses.contains) ?? false }
+    public var includesIOS: Bool { requestedTargets?.contains("ios") ?? true }
+}
+
+struct BuildRunPage: Decodable {
+    let runs: [BuildRun]?
+}
+
+/// An upload to a store and where Apple has it (`GET /projects/{id}/mobile-publish/store-builds`).
+public struct StoreBuild: Decodable, Hashable, Sendable {
+    public struct Release: Decodable, Hashable, Sendable {
+        public let appVersion: String?
+        public let buildNumber: String?
+        /// uploaded, processing, ready, in_review, live, rejected, unknown.
+        public let storeState: String?
+
+        public init(appVersion: String?, buildNumber: String?, storeState: String?) {
+            self.appVersion = appVersion
+            self.buildNumber = buildNumber
+            self.storeState = storeState
+        }
+
+        enum CodingKeys: String, CodingKey { case appVersion, buildNumber, storeState }
+
+        // Build numbers come as strings or numbers.
+        public init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            appVersion = Self.text(container, .appVersion)
+            buildNumber = Self.text(container, .buildNumber)
+            storeState = try? container.decodeIfPresent(String.self, forKey: .storeState)
+        }
+
+        private static func text(_ container: KeyedDecodingContainer<CodingKeys>, _ key: CodingKeys) -> String? {
+            if let string = try? container.decodeIfPresent(String.self, forKey: key) { return string }
+            if let number = try? container.decodeIfPresent(Int.self, forKey: key) { return String(number) }
+            return nil
+        }
+
+        /// "1.2 (14)"
+        public var label: String {
+            switch (appVersion, buildNumber) {
+            case let (version?, build?): return "\(version) (\(build))"
+            case let (version?, nil): return version
+            case let (nil, build?): return "build \(build)"
+            default: return "build"
+            }
+        }
+    }
+
+    public let runId: String?
+    public let target: String?
+    public let targetStatus: String?
+    public let createdAt: String?
+    public let storeRelease: Release?
+
+    public init(runId: String?, target: String?, targetStatus: String?, createdAt: String?, storeRelease: Release?) {
+        self.runId = runId
+        self.target = target
+        self.targetStatus = targetStatus
+        self.createdAt = createdAt
+        self.storeRelease = storeRelease
+    }
+}
+
+struct StoreBuildsResponse: Decodable {
+    let builds: [StoreBuild]?
+}

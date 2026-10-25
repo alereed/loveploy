@@ -20,6 +20,17 @@ Activa **Turbo** con el botón ⚡ del menú (o en Ajustes) y Loveploy publica s
 
 La Mac tiene que estar encendida con Loveploy abierto; para que arranque solo, activa **Abrir al iniciar sesión en la Mac** en Ajustes.
 
+## 📱 Apps de iOS: TestFlight y App Store
+
+Para los proyectos que tienen app de iOS en Lovable, cada fila muestra dos líneas más, y la pestaña **iOS** junta solo esos proyectos:
+
+- **TestFlight**: si el último build subido se hizo con el último código del proyecto (**al día**) o con uno anterior (**desactualizado: falta subir el último código**). También avisa si hay una subida en curso o si la última falló. Es la misma regla con la que Lovable decide si ofrecer una nueva subida.
+- **App Store**: qué versión está **en vivo** y si hay un build más nuevo que todavía no sale, con su estado en Apple: procesando, procesada sin enviar a revisión, en revisión o rechazada.
+
+Arriba de la lista aparece cuántas apps de iOS tienen código sin subir a TestFlight. Con clic derecho → **Abrir App Store Connect**.
+
+Por ahora Loveploy solo muestra el estado de iOS; las subidas a TestFlight y los envíos a revisión se siguen haciendo desde Lovable.
+
 ## Cómo sabe qué está desactualizado
 
 Usa la misma regla que el botón **Publish** de lovable.dev para ofrecer **Update**. Un proyecto está desactualizado cuando:
@@ -56,6 +67,8 @@ Loveploy no usa la API pública ni el MCP de Lovable. Hace lo mismo que la pági
 | Lovable vs. GitHub | `GET /workspaces/{ws}/projects/{id}/gitsync/sync-status` |
 | Publicar (botón Publish / Update) | `POST /projects/{id}/deployments` |
 | Avance de la publicación | `GET /projects/{id}/deployments/{deployment_id}/progress` |
+| Builds de iOS (commit de cada subida) | `GET /projects/{id}/build-runs?flow=manual&target=ios` |
+| Versiones en TestFlight / App Store | `GET /projects/{id}/mobile-publish/store-builds` |
 
 Estos endpoints son internos de la web de Lovable, no una API documentada. Si Lovable los cambia, Loveploy puede dejar de funcionar hasta que se actualice.
 
