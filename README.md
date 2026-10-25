@@ -29,7 +29,34 @@ Para los proyectos que tienen app de iOS en Lovable, cada fila muestra dos líne
 
 Arriba de la lista aparece cuántas apps de iOS tienen código sin subir a TestFlight. Con clic derecho → **Abrir App Store Connect**.
 
-Por ahora Loveploy solo muestra el estado de iOS; las subidas a TestFlight y los envíos a revisión se siguen haciendo desde Lovable.
+Los envíos a revisión de la App Store se siguen haciendo desde Lovable o App Store Connect.
+
+### Subir a TestFlight desde tus Mac mini
+
+En lugar de que Lovable compile la app, Loveploy puede mandar la señal a GitHub para que **tus Mac mini** (runners self-hosted de GitHub Actions) la compilen y la suban a TestFlight:
+
+1. Loveploy instala el workflow [`templates/loveploy-testflight.yml`](templates/loveploy-testflight.yml) en el repo del proyecto: clic derecho → **Instalar workflow de TestFlight (Mac mini) en el repo…**. Se agrega como un commit en la rama que Lovable sincroniza.
+2. Clic derecho → **Subir a TestFlight en Mac mini**, o en la pestaña **iOS** el botón **Subir N a TestFlight**, que manda todas las apps desactualizadas que tienen el workflow.
+3. Loveploy dispara el workflow con el commit de Lovable (cuando está en GitHub) y el siguiente número de build, sigue la ejecución y te avisa cuando termina. Esos builds cuentan para saber si TestFlight está al día.
+
+El workflow corre en runners con las etiquetas `self-hosted` y `macOS`:
+
+- detecta la app Expo (`app.json` / `app.config.*`) e instala dependencias con bun, pnpm, yarn o npm;
+- genera el proyecto nativo con `npx expo prebuild --platform ios` y corre `pod install`;
+- compila con `xcodebuild archive` y sube con `xcodebuild -exportArchive` (destino *upload*), firmando con la clave de API de App Store Connect.
+
+**Preparar cada Mac mini (una vez):**
+
+1. Instala Xcode, Node (y bun/pnpm/yarn si los usas) y CocoaPods.
+2. Registra el Mac como runner de GitHub Actions de tu organización (Settings → Actions → Runners → New self-hosted runner → macOS) y córrelo como servicio (`./svc.sh install && ./svc.sh start`). Las etiquetas `self-hosted` y `macOS` se ponen solas.
+3. Crea una clave de API en App Store Connect (Users and Access → Integrations → App Store Connect API) con rol **Admin** (lo necesita la firma automática en la nube) y pon las credenciales de una de estas dos formas:
+   - **Secretos de la organización o del repo**: `ASC_KEY_ID`, `ASC_ISSUER_ID`, `APPLE_TEAM_ID` y `ASC_KEY_P8` (el contenido del `.p8`).
+   - **En el Mac mini**: las mismas variables en el archivo `.env` del runner, y el `.p8` en `~/.appstoreconnect/private_keys/AuthKey_<ID>.p8` (o su ruta en `ASC_KEY_PATH`).
+4. Cada app debe existir en App Store Connect con el bundle ID de su `app.json`.
+
+El token de GitHub de Loveploy necesita, además de lectura, permiso de escritura en **Actions**, **Contents** y **Workflows** (o los scopes `repo` y `workflow` en un token clásico).
+
+El número de build sigue al más alto que Loveploy conoce (de Lovable o de tus Mac mini) más uno. Si mezclas subidas desde Lovable y desde los Mac mini, Apple rechaza un número repetido; en ese caso vuelve a mandarlo y Loveploy usará el siguiente.
 
 ## Cómo sabe qué está desactualizado
 
@@ -69,6 +96,8 @@ Loveploy no usa la API pública ni el MCP de Lovable. Hace lo mismo que la pági
 | Avance de la publicación | `GET /projects/{id}/deployments/{deployment_id}/progress` |
 | Builds de iOS (commit de cada subida) | `GET /projects/{id}/build-runs?flow=manual&target=ios` |
 | Versiones en TestFlight / App Store | `GET /projects/{id}/mobile-publish/store-builds` |
+
+Para los Mac mini usa la API de GitHub con tu token: `POST /repos/{repo}/actions/workflows/loveploy-testflight.yml/dispatches`, `GET .../runs` y `PUT /repos/{repo}/contents/.github/workflows/loveploy-testflight.yml` para instalarlo.
 
 Estos endpoints son internos de la web de Lovable, no una API documentada. Si Lovable los cambia, Loveploy puede dejar de funcionar hasta que se actualice.
 
@@ -113,4 +142,5 @@ Sources/LoveployCore/   Sesión, cliente de lovable.dev y de GitHub, regla de de
 Sources/Loveploy/       App SwiftUI de barra de menú y ventana de login con WebKit
 Tests/                  Pruebas del núcleo: swift test
 scripts/build-app.sh    Arma Loveploy.app
+templates/              Workflow de TestFlight para Mac mini que Loveploy instala en los repos
 ```

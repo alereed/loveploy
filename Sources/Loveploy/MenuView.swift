@@ -177,6 +177,18 @@ struct MenuView: View {
                     .foregroundStyle(.secondary)
             }
             Spacer()
+            if model.filter == .ios {
+                Button {
+                    model.uploadOutdatedToMac()
+                } label: {
+                    Label(macTitle, systemImage: "airplane")
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(model.macUploadCandidates.isEmpty)
+                .help(model.hasGitHub
+                    ? "Manda a tus Mac mini (GitHub Actions) las apps con TestFlight desactualizado"
+                    : "Conecta GitHub en Ajustes para compilar en tus Mac mini")
+            } else {
             Button {
                 model.deploySelected()
             } label: {
@@ -192,8 +204,14 @@ struct MenuView: View {
             .buttonStyle(.borderedProminent)
             .keyboardShortcut(.defaultAction)
             .disabled(model.isDeploying || model.selectedRows.isEmpty)
+            }
         }
         .padding(12)
+    }
+
+    private var macTitle: String {
+        let count = model.macUploadCandidates.count
+        return count == 1 ? "Subir 1 a TestFlight" : "Subir \(count) a TestFlight"
     }
 
     private var publishTitle: String {
@@ -240,6 +258,7 @@ struct ProjectRowView: View {
                 }
                 if let ios = row.ios {
                     IOSLine(ios: ios)
+                    MacLine(ios: ios, dispatch: model.macDispatches[row.id], hasGitHub: model.hasGitHub)
                 }
             }
             Spacer(minLength: 4)
@@ -312,6 +331,18 @@ struct ProjectRowView: View {
         if row.ios != nil {
             Button("Abrir App Store Connect") {
                 NSWorkspace.shared.open(URL(string: "https://appstoreconnect.apple.com/apps")!)
+            }
+        }
+        if model.hasGitHub, row.git != nil {
+            Divider()
+            if row.ios?.macWorkflowInstalled == true {
+                Button("Subir a TestFlight en Mac mini") { model.uploadToTestFlightOnMac(row) }
+                    .disabled(!model.canBuildOnMac(row))
+            } else if row.ios == nil || row.ios?.macWorkflowInstalled == false {
+                Button("Instalar workflow de TestFlight (Mac mini) en el repo…") { model.installMacWorkflow(row) }
+            }
+            if let url = row.ios?.macRun?.htmlUrl.flatMap(URL.init(string:)) {
+                Button("Ver última ejecución en GitHub") { NSWorkspace.shared.open(url) }
             }
         }
         Divider()
@@ -438,6 +469,62 @@ struct IOSLine: View {
             return "App Store \(live.label) en vivo, al día con TestFlight"
         }
         return "App Store \(live.label) en vivo · \(latest.label) \(latest.stateLabel)"
+    }
+}
+
+/// What the Mac minis are doing for this app.
+struct MacLine: View {
+    let ios: IOSStatus
+    let dispatch: AppModel.MacDispatch?
+    let hasGitHub: Bool
+
+    var body: some View {
+        if let text {
+            HStack(spacing: 4) {
+                Image(systemName: "macmini")
+                Text(text).lineLimit(2)
+            }
+            .font(.caption2)
+            .foregroundStyle(color)
+        }
+    }
+
+    private var text: String? {
+        switch dispatch {
+        case .sending: return "Mac mini: mandando la señal a GitHub…"
+        case .running: return "Mac mini: compilando y subiendo a TestFlight…"
+        case .done(let build): return "Mac mini: subió el build \(build ?? "") a TestFlight"
+        case .failed(let message): return "Mac mini: \(message)"
+        case nil: break
+        }
+        if let run = ios.macRun {
+            let build = run.buildNumber.map { "build \($0)" } ?? "build"
+            if !run.isFinished { return "Mac mini: compilando \(build)…" }
+            let when = run.createdAt.flatMap(parseDate).map { " · \($0.formatted(.relative(presentation: .named)))" } ?? ""
+            return run.succeeded ? "Mac mini: \(build) subido\(when)" : "Mac mini: falló \(build)\(when)"
+        }
+        switch ios.macWorkflowInstalled {
+        case true?: return "Mac mini: listo, aún sin builds"
+        case false?: return "Mac mini: instala el workflow (clic derecho)"
+        case nil: return nil
+        }
+    }
+
+    private var color: Color {
+        switch dispatch {
+        case .failed: return .red
+        case .sending, .running: return .blue
+        default: break
+        }
+        if let run = ios.macRun {
+            if !run.isFinished { return .blue }
+            return run.succeeded ? .secondary : .red
+        }
+        return .secondary
+    }
+
+    private func parseDate(_ string: String) -> Date? {
+        ISO8601DateFormatter().date(from: string)
     }
 }
 

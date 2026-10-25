@@ -80,7 +80,7 @@ struct SettingsView: View {
                         .buttonStyle(.borderless)
                 }
             } else {
-                Text("Lovable ya dice qué repo usa cada proyecto y si GitHub va adelante. Con un token de GitHub, además ves qué commits faltan por publicar.")
+                Text("Lovable ya dice qué repo usa cada proyecto y si GitHub va adelante. Con un token de GitHub, además ves qué commits faltan por publicar y puedes compilar las apps de iOS en tus Mac mini.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 SecureField("Token de GitHub (github_pat_… o ghp_…)", text: $githubToken)
@@ -95,7 +95,7 @@ struct SettingsView: View {
                     Button("Conectar") { connectGitHub() }
                         .disabled(githubToken.trimmingCharacters(in: .whitespaces).isEmpty || isConnecting)
                 }
-                Text("Solo lectura: «Contents» y «Metadata» (o el scope «repo» en un token clásico).")
+                Text("Para ver commits basta lectura de «Contents». Para TestFlight en Mac mini: «Actions», «Contents» y «Workflows» con escritura (o los scopes «repo» y «workflow» en un token clásico).")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }

@@ -8,6 +8,8 @@ public struct LoveployState: Codable, Equatable, Sendable {
     public var turbo: Bool = false
     /// How long a project's changes must stay the same before Turbo publishes it.
     public var turboDelayMinutes: Int = 5
+    /// Last build number sent to the Mac mini workflow per project, so the next one goes higher.
+    public var macBuildNumbers: [String: String] = [:]
 
     public init(excluded: Set<String> = [], turbo: Bool = false, turboDelayMinutes: Int = 5) {
         self.excluded = excluded
@@ -21,6 +23,7 @@ public struct LoveployState: Codable, Equatable, Sendable {
         excluded = (try? container.decodeIfPresent(Set<String>.self, forKey: .excluded)) ?? []
         turbo = (try? container.decodeIfPresent(Bool.self, forKey: .turbo)) ?? false
         turboDelayMinutes = (try? container.decodeIfPresent(Int.self, forKey: .turboDelayMinutes)) ?? 5
+        macBuildNumbers = (try? container.decodeIfPresent([String: String].self, forKey: .macBuildNumbers)) ?? [:]
     }
 }
 
