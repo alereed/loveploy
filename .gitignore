@@ -147,3 +147,9 @@ vite.config.ts.timestamp-*
 
 # Turbo Repo
 .turbo
+
+# Swift / Loveploy
+.build/
+.swiftpm/
+dist/
+*.xcodeproj/xcuserdata/

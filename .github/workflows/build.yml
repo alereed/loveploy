@@ -1,0 +1,21 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test core
+        run: swift test
+      - name: Build Loveploy.app
+        run: scripts/build-app.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Loveploy
+          path: dist/Loveploy.zip
