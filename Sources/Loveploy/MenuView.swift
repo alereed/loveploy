@@ -11,11 +11,13 @@ struct MenuView: View {
             Divider()
             if model.showingSettings {
                 SettingsView()
+            } else if !model.isSignedIn {
+                signedOut
             } else {
                 content
             }
         }
-        .frame(width: 400)
+        .frame(width: 420)
         .onAppear { model.refreshIfStale() }
     }
 
@@ -32,7 +34,7 @@ struct MenuView: View {
                 Image(systemName: "arrow.clockwise")
             }
             .help("Actualizar lista")
-            .disabled(model.isRefreshing || model.isDeploying || model.keys.isEmpty)
+            .disabled(model.isRefreshing || model.isDeploying || !model.isSignedIn)
             Button {
                 model.showingSettings.toggle()
             } label: {
@@ -42,6 +44,28 @@ struct MenuView: View {
         }
         .buttonStyle(.borderless)
         .padding(12)
+    }
+
+    private var signedOut: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "heart.circle").font(.system(size: 36)).foregroundStyle(.pink)
+            Text("Inicia sesión en Lovable").font(.headline)
+            Text("Se abre lovable.dev para que entres como siempre (Google, GitHub o correo). Loveploy usa esa misma sesión para ver y publicar tus proyectos.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+            ForEach(model.errors, id: \.self) { error in
+                Text(error).font(.caption).foregroundStyle(.orange).multilineTextAlignment(.center)
+            }
+            Button("Iniciar sesión en Lovable") { model.signIn() }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+            Button("Salir de Loveploy") { NSApp.terminate(nil) }
+                .buttonStyle(.borderless)
+                .font(.caption)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity)
     }
 
     @ViewBuilder
@@ -64,7 +88,7 @@ struct MenuView: View {
                         }
                     }
                 }
-                .frame(minHeight: 120, maxHeight: 380)
+                .frame(minHeight: 120, maxHeight: 400)
             }
 
             ForEach(model.errors, id: \.self) { error in
@@ -82,9 +106,11 @@ struct MenuView: View {
     private var summary: some View {
         HStack(spacing: 12) {
             StateCount(state: .outdated, count: model.count(.outdated))
-            StateCount(state: .unknown, count: model.count(.unknown))
             StateCount(state: .upToDate, count: model.count(.upToDate))
             StateCount(state: .unpublished, count: model.count(.unpublished))
+            if model.count(.unknown) > 0 {
+                StateCount(state: .unknown, count: model.count(.unknown))
+            }
         }
         .font(.caption)
     }
@@ -96,7 +122,7 @@ struct MenuView: View {
                 Text("Cargando proyectos…")
             } else if model.filter == .pending {
                 Image(systemName: "checkmark.seal.fill").font(.title).foregroundStyle(.green)
-                Text("Todo está publicado y al día.")
+                Text("Todo lo publicado está al día.")
             } else {
                 Text("No hay proyectos.")
             }
@@ -178,13 +204,13 @@ struct ProjectRowView: View {
             .disabled(model.isDeploying)
 
             VStack(alignment: .leading, spacing: 1) {
-                Text(row.summary.displayName).lineLimit(1)
+                Text(row.summary.label).lineLimit(1)
                 Text(subtitle)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
-                if let github = row.github {
-                    GitHubLine(row: row, github: github)
+                if let git = row.git {
+                    GitLine(row: row, git: git)
                 }
             }
             Spacer(minLength: 4)
@@ -197,15 +223,20 @@ struct ProjectRowView: View {
     }
 
     private var subtitle: String {
-        if case .failed(let message) = model.progress[row.id] {
-            return message
+        switch model.progress[row.id] {
+        case .failed(let message): return message
+        case .publishing(let step?): return step
+        default: break
         }
-        var parts = [row.workspaceName]
-        if let edited = row.summary.lastEditedAt {
+        if let error = row.error {
+            return error
+        }
+        var parts = [row.workspace.displayName]
+        if let edited = row.summary.editedAt {
             parts.append("editado \(edited.formatted(.relative(presentation: .named)))")
         }
-        if let published = row.record?.publishedAt {
-            parts.append("publicado \(published.formatted(.relative(presentation: .named)))")
+        if row.details?.publishedDeployment?.secretsChanged == true {
+            parts.append("cambiaron los secretos")
         }
         return parts.joined(separator: " · ")
     }
@@ -235,29 +266,16 @@ struct ProjectRowView: View {
 
     @ViewBuilder
     private var contextMenu: some View {
-        if let url = row.record?.url.flatMap(URL.init(string:)) {
+        Button("Abrir en Lovable") {
+            NSWorkspace.shared.open(URL(string: "https://lovable.dev/projects/\(row.id)")!)
+        }
+        if let url = row.liveURL.flatMap(URL.init(string:)) {
             Button("Abrir sitio publicado") { NSWorkspace.shared.open(url) }
         }
-        if let url = row.previewUrl.flatMap(URL.init(string:)) {
-            Button("Abrir preview") { NSWorkspace.shared.open(url) }
+        if let url = row.git?.url.flatMap(URL.init(string:)) {
+            Button("Abrir repo en GitHub") { NSWorkspace.shared.open(url) }
         }
-        if row.state == .unknown || row.state == .outdated {
-            Button("Marcar como al día (sin publicar)") { model.markUpToDate(row) }
-        }
-        if model.hasGitHub {
-            Divider()
-            if let url = row.github?.repoURL.flatMap(URL.init(string:)) {
-                Button("Abrir repo en GitHub") { NSWorkspace.shared.open(url) }
-            }
-            Menu(row.github == nil ? "Vincular repo de GitHub" : "Cambiar repo de GitHub") {
-                ForEach(model.repoChoices(for: row)) { repo in
-                    Button(repo.fullName) { model.link(row, to: repo) }
-                }
-            }
-            if row.github != nil {
-                Button("Desvincular repo") { model.unlink(row) }
-            }
-        }
+        Divider()
         Button("Copiar ID del proyecto") {
             NSPasteboard.general.clearContents()
             NSPasteboard.general.setString(row.id, forType: .string)
@@ -265,14 +283,14 @@ struct ProjectRowView: View {
     }
 }
 
-/// "owner/repo · 3 commits nuevos: «Fix header»", or a warning when Lovable is behind GitHub.
-struct GitHubLine: View {
+/// "owner/repo · 3 commits sin publicar: «Fix header»", or a warning when GitHub is ahead of Lovable.
+struct GitLine: View {
     let row: ProjectRow
-    let github: GitHubStatus
+    let git: GitStatus
 
     var body: some View {
         HStack(spacing: 4) {
-            Image(systemName: icon)
+            Image(systemName: git.remoteAhead ? "exclamationmark.triangle.fill" : "arrow.triangle.branch")
             Text(text).lineLimit(2)
         }
         .font(.caption2)
@@ -280,54 +298,41 @@ struct GitHubLine: View {
         .help(tooltip)
     }
 
-    private var repoName: String {
-        github.link.fullName + (github.link.branch.map { "@\($0)" } ?? "")
-    }
-
-    private var behind: Bool { github.lovableIsBehind(latestCommitSha: row.latestCommitSha) }
-
-    private var icon: String {
-        if github.error != nil || behind { return "exclamationmark.triangle.fill" }
-        return "arrow.triangle.branch"
-    }
-
     private var color: Color {
-        if github.error != nil || behind { return .orange }
-        if let commits = github.newCommits, !commits.isEmpty { return .primary }
+        if git.remoteAhead { return .orange }
+        if let commits = git.newCommits, !commits.isEmpty { return .primary }
         return .secondary
     }
 
     private var text: String {
-        if let error = github.error {
-            return "\(repoName): \(error)"
+        switch git.syncState {
+        case "remote_ahead":
+            let count = git.behind.map { $0 == 1 ? "1 commit" : "\($0) commits" } ?? "commits"
+            return "\(git.repo) tiene \(count) que Lovable aún no sincroniza; publicar no los incluiría"
+        case "diverged":
+            return "Lovable y \(git.repo) se separaron; revisa la sincronización en Lovable"
+        default:
+            break
         }
-        if behind {
-            return "\(repoName) tiene cambios que Lovable aún no sincroniza; publicar no los incluiría"
+        if let commits = git.newCommits, let latest = commits.first {
+            let count = commits.count == 1 ? "1 commit sin publicar" : "\(commits.count) commits sin publicar"
+            return "\(git.repo) · \(count): «\(latest.headline)»"
         }
-        if let commits = github.newCommits, let latest = commits.first {
-            let count = commits.count == 1 ? "1 commit nuevo" : "\(commits.count) commits nuevos"
-            return "\(repoName) · \(count): «\(latest.headline)»"
+        switch git.syncState {
+        case "in_sync": return "\(git.repo) · en sync con Lovable"
+        case "lovable_ahead": return "\(git.repo) · Lovable tiene cambios por subir a GitHub"
+        default: return git.repo
         }
-        if github.newCommits == nil, row.record != nil, row.record?.githubSha == nil, !github.sharesCommits {
-            return "\(repoName) · se seguirá desde la próxima publicación"
-        }
-        if let head = github.head {
-            return "\(repoName) · «\(head.headline)»"
-        }
-        return repoName
     }
 
     private var tooltip: String {
-        var lines = ["Repo: \(github.link.fullName)"]
-        switch github.link.source {
-        case .commit: lines.append("Vinculado por commit (Lovable y GitHub comparten historial)")
-        case .name: lines.append("Vinculado por nombre; si no es el repo correcto, cámbialo con clic derecho")
-        case .manual: lines.append("Vinculado a mano")
-        }
-        if let commits = github.newCommits, !commits.isEmpty {
+        var lines = ["Repo: \(git.repo)" + (git.branch.map { " (\($0))" } ?? "")]
+        if let commits = git.newCommits, !commits.isEmpty {
             lines.append("")
             lines.append(contentsOf: commits.prefix(10).map { "• \($0.headline)" })
             if commits.count > 10 { lines.append("… y \(commits.count - 10) más") }
+        } else if git.newCommits == nil, row.state == .outdated {
+            lines.append("Conecta GitHub en Ajustes para ver qué commits faltan.")
         }
         return lines.joined(separator: "\n")
     }

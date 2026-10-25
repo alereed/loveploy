@@ -1,30 +1,22 @@
 import Foundation
+import LoveployCore
 import Security
 
-/// One Lovable API key. Keys are workspace-scoped, so one per workspace.
-struct APIKeyEntry: Codable, Identifiable, Hashable {
-    var id = UUID()
-    var label: String
-    var key: String
-
-    var masked: String {
-        guard key.count > 10 else { return "••••" }
-        return "\(key.prefix(6))…\(key.suffix(4))"
-    }
-}
-
-/// Stores secrets in the login Keychain: the Lovable API keys (as one JSON item) and the GitHub token.
+/// Stores secrets in the login Keychain: the Lovable session and the optional GitHub token.
 enum Keychain {
     private static let service = "mx.blender.loveploy"
 
-    static func loadKeys() -> [APIKeyEntry] {
-        guard let data = load(account: "api-keys") else { return [] }
-        return (try? JSONDecoder().decode([APIKeyEntry].self, from: data)) ?? []
+    static func loadCredentials() -> LovableCredentials? {
+        guard let data = load(account: "lovable-session") else { return nil }
+        return try? JSONDecoder().decode(LovableCredentials.self, from: data)
     }
 
-    static func saveKeys(_ keys: [APIKeyEntry]) {
-        guard let data = try? JSONEncoder().encode(keys) else { return }
-        save(data, account: "api-keys")
+    static func saveCredentials(_ credentials: LovableCredentials?) {
+        guard let credentials, let data = try? JSONEncoder().encode(credentials) else {
+            delete(account: "lovable-session")
+            return
+        }
+        save(data, account: "lovable-session")
     }
 
     static func loadGitHubToken() -> String? {
@@ -35,7 +27,7 @@ enum Keychain {
         if let token {
             save(Data(token.utf8), account: "github-token")
         } else {
-            SecItemDelete(query(account: "github-token") as CFDictionary)
+            delete(account: "github-token")
         }
     }
 
@@ -65,5 +57,9 @@ enum Keychain {
             item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlock
             SecItemAdd(item as CFDictionary, nil)
         }
+    }
+
+    private static func delete(account: String) {
+        SecItemDelete(query(account: account) as CFDictionary)
     }
 }

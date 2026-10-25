@@ -2,48 +2,57 @@
 
 App de barra de menú para Mac que publica de un clic todos tus proyectos de [Lovable](https://lovable.dev) que estén desactualizados.
 
-- El ícono de la barra muestra cuántos proyectos tienen pendiente publicarse.
-- Al darle clic se abre la lista de todos tus proyectos con su estado: **Desactualizado**, **Sin registro**, **Al día** y **Sin publicar**.
-- Con las casillas eliges cuáles entran a la lista de despliegue. Si quitas un proyecto pendiente, Loveploy lo recuerda y no lo vuelve a incluir.
-- **Publicar N proyectos** los publica todos (3 a la vez), muestra el avance de cada uno y te avisa con una notificación al terminar.
+- **Sin API keys ni MCP.** Inicias sesión en lovable.dev dentro de la app (Google, GitHub o correo, como siempre) y Loveploy usa esa misma sesión, igual que el navegador.
+- El ícono de la barra muestra cuántos proyectos tienen cambios sin publicar.
+- Al darle clic se abre la lista de todos tus proyectos, de todos tus workspaces, con su estado: **Desactualizado**, **Al día** o **Sin publicar**.
+- Con las casillas eliges cuáles entran a la lista de despliegue. Si quitas uno desactualizado, Loveploy lo recuerda y no lo vuelve a incluir.
+- **Publicar N proyectos** los publica (3 a la vez) igual que el botón Publish / Update de Lovable, muestra el paso en que va cada uno y te avisa con una notificación al terminar.
 
 ## Cómo sabe qué está desactualizado
 
-La API de Lovable dice cuál es el último commit de un proyecto (`latest_commit_sha`), pero no qué commit está publicado. Por eso Loveploy guarda qué commit publicó cada vez y compara:
+Usa la misma regla que el botón **Publish** de lovable.dev para ofrecer **Update**. Un proyecto está desactualizado cuando:
 
-| Estado | Significado | ¿Entra por defecto? |
-| - | - | - |
-| Desactualizado | Hay commits nuevos desde la última publicación hecha con Loveploy | Sí |
-| Sin registro | Está publicado, pero no con Loveploy, así que no sabemos qué versión está en vivo | Sí |
-| Al día | Lo publicado coincide con el último commit | No (puedes forzarlo marcando la casilla) |
-| Sin publicar | Nunca se ha publicado | No (puedes incluirlo marcando la casilla) |
+- su último commit no es el que está publicado, o
+- cambiaron los secretos desde la última publicación.
 
-### Con GitHub
+No hace falta llevar registro propio: Lovable dice qué commit está en vivo.
 
-Si conectas GitHub (Ajustes → GitHub), Loveploy también revisa los repos sincronizados con tus proyectos:
+### GitHub
 
-- **Vincula cada proyecto con su repo solo.** Cuando un proyecto está sincronizado, Lovable y GitHub están en el mismo commit, así que Loveploy busca el último commit de Lovable entre las ramas principales de tus repos. Si no lo encuentra, usa el repo cuyo nombre coincide con el del proyecto. Puedes cambiar o quitar el vínculo con clic derecho → **Cambiar repo de GitHub** / **Desvincular repo**.
-- **Marca como desactualizado cualquier proyecto cuyo repo tenga commits después de la última publicación**, aunque los cambios vengan de tu IDE, de un PR o de otra persona.
-- **Muestra cuántos commits faltan** y el mensaje del más reciente (pasa el cursor para ver la lista).
-- **Avisa cuando GitHub va adelante de Lovable**: el push todavía no se sincronizó, así que publicar no lo incluiría. En ese caso hay que esperar a que Lovable sincronice (o empujar un commit nuevo a la rama sincronizada, ver la [guía de Lovable](https://docs.lovable.dev/integrations/github)).
+Para cada proyecto conectado a GitHub, Loveploy le pregunta a Lovable a qué repo y rama está sincronizado y cómo va esa sincronización:
 
-El token solo necesita lectura: un [fine-grained token](https://github.com/settings/personal-access-tokens/new) con los permisos **Contents: Read** y **Metadata: Read** sobre los repos (incluye las organizaciones donde estén), o un token clásico con el scope `repo`. Se guarda en el Llavero.
+- **En sync**: Lovable y GitHub están en el mismo commit.
+- **GitHub va adelante**: hay pushes (de tu IDE, de un PR o de otra persona) que Lovable aún no jala. Publicar no los incluiría, así que aparece un aviso en naranja.
+- **Se separaron**: hay que resolver la sincronización en Lovable.
 
-Si un proyecto se vinculó por nombre o a mano y ya tenía registro de publicación previo, Loveploy empieza a seguir su repo desde la siguiente publicación.
+Si además conectas un token de GitHub (opcional, en Ajustes), cada proyecto desactualizado muestra cuántos commits faltan por publicar y el mensaje del más reciente (pasa el cursor para ver la lista). El token solo necesita lectura: un [fine-grained token](https://github.com/settings/personal-access-tokens/new) con **Contents: Read** y **Metadata: Read**, o un token clásico con `repo`.
 
-### Primera vez
+## Cómo funciona por dentro
 
-La primera vez todos los proyectos publicados aparecen como **Sin registro**. Puedes publicarlos todos una vez (las publicaciones no consumen créditos de IA) o, si sabes que ya están al día, usar **Ajustes → Marcar todos los «Sin registro» como al día**. También puedes hacerlo proyecto por proyecto con clic derecho.
+Loveploy no usa la API pública ni el MCP de Lovable. Hace lo mismo que la página de lovable.dev:
 
-Si editas un proyecto desde Lovable y lo publicas ahí mismo, Loveploy lo seguirá viendo como desactualizado. Usa clic derecho → **Marcar como al día**.
+1. **Login**: abre lovable.dev en una ventana con WebKit. Cuando inicias sesión, lee la sesión de Firebase que la página guarda en el navegador (IndexedDB) y la guarda en el Llavero de tu Mac.
+2. **Renovar sesión**: renueva el token como lo hace el SDK de Firebase de la página. Si eso falla, abre lovable.dev en segundo plano para que la propia página lo renueve. Si tampoco funciona, te pide iniciar sesión otra vez.
+3. **Datos**: llama a los mismos endpoints que usa la web de Lovable, con tu sesión:
 
-El estado se guarda en `~/Library/Application Support/Loveploy/state.json` y las API keys en el Llavero (Keychain).
+| Para qué | Endpoint |
+| - | - |
+| Tus workspaces | `GET /user/workspaces` |
+| Proyectos del workspace | `GET /v2/workspaces/{ws}/projects` |
+| Commit publicado vs. último commit | `GET /projects/{id}/details` |
+| Repo y rama de GitHub | `GET /workspaces/{ws}/projects/{id}/gitsync` |
+| Lovable vs. GitHub | `GET /workspaces/{ws}/projects/{id}/gitsync/sync-status` |
+| Publicar (botón Publish / Update) | `POST /projects/{id}/deployments` |
+| Avance de la publicación | `GET /projects/{id}/deployments/{deployment_id}/progress` |
+
+Estos endpoints son internos de la web de Lovable, no una API documentada. Si Lovable los cambia, Loveploy puede dejar de funcionar hasta que se actualice.
+
+`Cerrar sesión` borra la sesión del Llavero y los datos de lovable.dev del navegador interno. Lo único que se guarda en disco son los proyectos excluidos, en `~/Library/Application Support/Loveploy/state.json`.
 
 ## Requisitos
 
 - macOS 13 (Ventura) o más nuevo.
-- Un workspace de Lovable con plan **Business** o **Enterprise** (la API pública lo requiere).
-- Una API key creada en [Workspace settings → API keys & OAuth](https://lovable.dev/settings/api-keys) con los permisos `projects:write` y `workspaces:read`. Las keys son por workspace; si tienes varios workspaces, agrega una key por cada uno.
+- Una cuenta de Lovable con permiso para publicar los proyectos. No importa el plan.
 
 ## Instalar
 
@@ -61,24 +70,22 @@ cd loveploy
 scripts/build-app.sh --install
 ```
 
-Eso compila `dist/Loveploy.app` (universal, Apple Silicon e Intel), la copia a `/Applications` y la abre. Para desarrollo también funciona `swift run Loveploy`.
+Eso compila `dist/Loveploy.app` (universal, Apple Silicon e Intel), la copia a `/Applications` y la abre.
 
 ## Uso
 
-1. Clic en el ícono ♥ de la barra de menú.
-2. La primera vez se abren los ajustes: pega tu API key y dale **Agregar**.
-3. En **Pendientes** ves lo que falta publicar; en **Todos**, todos tus proyectos.
-4. Marca o desmarca lo que quieras y dale **Publicar** (o Enter).
+1. Clic en el ícono ♥ de la barra de menú → **Iniciar sesión en Lovable** y entra como siempre.
+2. En **Pendientes** ves lo que falta publicar; en **Todos**, todos tus proyectos.
+3. Marca o desmarca lo que quieras y dale **Publicar** (o Enter).
+4. Clic derecho en un proyecto para abrirlo en Lovable, abrir el sitio publicado o abrir el repo.
 
-La lista se actualiza sola cada 15 minutos y cada vez que abres el menú. En Ajustes puedes activar **Abrir al iniciar sesión**.
+La lista se actualiza sola cada 15 minutos y cada vez que abres el menú. En Ajustes puedes activar **Abrir al iniciar sesión en la Mac**.
 
 ## Estructura
 
 ```
-Sources/LoveployCore/   Clientes de Lovable y GitHub, estado y lógica de despliegue (también compila en Linux)
-Sources/Loveploy/       App SwiftUI de barra de menú (MenuBarExtra)
+Sources/LoveployCore/   Sesión, cliente de lovable.dev y de GitHub, regla de desactualizado, despliegue (también compila en Linux)
+Sources/Loveploy/       App SwiftUI de barra de menú y ventana de login con WebKit
 Tests/                  Pruebas del núcleo: swift test
 scripts/build-app.sh    Arma Loveploy.app
 ```
-
-API usada (versión `2026-09-11`): `GET /v1/workspaces`, `GET /v1/projects`, `GET /v1/projects/{id}`, `POST /v1/projects/{id}/publish` y `GET /v1/projects/{id}/publish/{deployment_id}`. De GitHub: GraphQL `viewer.repositories` (repos con el último commit de su rama principal), `GET /repos/{repo}/commits/{rama}` y `GET /repos/{repo}/compare/{base}...{head}`. Ver la [referencia de la API de Lovable](https://docs.lovable.dev/api-reference/introduction).
