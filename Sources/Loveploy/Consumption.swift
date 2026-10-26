@@ -6,18 +6,19 @@ import SwiftUI
 // Loveploy: how much of each account's weekly limit is left, in the panel and the menu bar,
 // and how many hours went into development (from Claude Code's transcripts).
 
-/// Keeps `DevHours` up to date, reading only what the transcripts gained.
+/// Keeps the usage ledger (time and tokens per session) up to date, reading only what the
+/// transcripts gained. Development hours and project billing both come from it.
 @MainActor
 final class DevClock: ObservableObject {
     static let shared = DevClock()
+    @Published private(set) var ledger = UsageLedger()
     @Published private(set) var hours = DevHours()
+    @Published private(set) var scanning = false
     private var timer: Timer?
-    private var scanning = false
-    private let store = DevHoursStore()
+    private let file = JSONFile<UsageLedger>(named: "ledger.json")
 
     func start() {
         guard timer == nil else { return }
-        hours = store.load()
         timer = Timer(timeInterval: 120, repeats: true) { _ in MainActor.assumeIsolated { DevClock.shared.refresh() } }
         RunLoop.main.add(timer!, forMode: .common)
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { DevClock.shared.refresh() }
@@ -28,16 +29,21 @@ final class DevClock: ObservableObject {
         scanning = true
         var roots = Accounts.localRoots().map(\.root)
         roots += Engine.shared.profiles.map { $0.folderURL.appendingPathComponent("local-agent-mode-sessions") }
-        let current = hours
-        let store = store
+        let first = timer != nil && ledger.offsets.isEmpty
+        let current = ledger
+        let file = file
         Task.detached(priority: .utility) {
-            var updated = current
+            var updated = first ? (file.load() ?? current) : current
+            let before = updated
             updated.scan(roots: roots)
-            try? store.save(updated)
+            if updated != before { try? file.save(updated) }
             let result = updated
+            let hours = updated.devHours
             await MainActor.run {
-                DevClock.shared.hours = result
-                DevClock.shared.scanning = false
+                let clock = DevClock.shared
+                if clock.ledger != result { clock.ledger = result }
+                if clock.hours.slots != hours.slots { clock.hours = hours }
+                clock.scanning = false
             }
         }
     }
@@ -134,6 +140,7 @@ struct ConsumptionSection: View {
                         engine.onChange?()
                     }
                 }
+                PlainRow(title: "Proyectos y cobro…") { ProjectsWindow.show() }
                 PlainRow(title: "Ver consumo detallado…") {
                     PanelController.shared.close()
                     UsageWindow.show()

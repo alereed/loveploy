@@ -118,3 +118,22 @@ final class SessionGroupTests: XCTestCase {
         XCTAssertEqual(pane.shellCommand, "cd '/Users/ale/loveploy' && exec claude --resume 's1'")
     }
 }
+
+final class GroupShortcutTests: XCTestCase {
+    func testDisplaySuggestionAndStorage() throws {
+        let all = GroupShortcut.command | GroupShortcut.option | GroupShortcut.control
+        let first = GroupShortcut.suggestion(taken: [nil])
+        XCTAssertEqual(first?.display, "⌃⌥⌘1")
+        XCTAssertEqual(first?.keyCode, 0x12)
+        let third = GroupShortcut.suggestion(taken: [first, GroupShortcut(keyCode: 0x13, modifiers: all, key: "2"), GroupShortcut(keyCode: 0x13, modifiers: GroupShortcut.command, key: "2")])
+        XCTAssertEqual(third?.display, "⌃⌥⌘3")
+        XCTAssertEqual(GroupShortcut(keyCode: 5, modifiers: GroupShortcut.shift | GroupShortcut.command, key: "g").display, "⇧⌘G")
+        XCTAssertFalse(GroupShortcut(keyCode: 5, modifiers: GroupShortcut.shift, key: "g").isUsable)
+        XCTAssertTrue(first!.sameKeys(as: GroupShortcut(keyCode: 0x12, modifiers: all, key: "x")))
+
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("groups.json")
+        let store = SessionGroupStore(fileURL: url)
+        try store.save([SessionGroup(name: "Revisar", shortcut: first)])
+        XCTAssertEqual(store.load().first?.shortcut, first)
+    }
+}

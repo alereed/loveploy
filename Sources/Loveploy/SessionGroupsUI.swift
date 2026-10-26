@@ -53,15 +53,48 @@ final class SessionGroups: ObservableObject {
 
     func delete(_ id: UUID) {
         windows[id]?.close()
+        let hadShortcut = group(id)?.shortcut != nil
         groups.removeAll { $0.id == id }
+        save()
+        if hadShortcut { Engine.shared.updateHotKeys() }
+    }
+
+    /// Gives the group a global shortcut (taking it from any other group that had it).
+    func setShortcut(_ shortcut: GroupShortcut?, for id: UUID) {
+        for index in groups.indices where groups[index].id != id && shortcut?.sameKeys(as: groups[index].shortcut) == true {
+            groups[index].shortcut = nil
+        }
+        change(id) { $0.shortcut = shortcut }
+        Engine.shared.updateHotKeys()
+    }
+
+    /// The pane's new session has started, so from now on it resumes it.
+    func markStarted(_ paneID: UUID) {
+        guard let index = groups.firstIndex(where: { $0.panes.contains { $0.id == paneID } }),
+              var pane = groups[index].panes.first(where: { $0.id == paneID }), pane.startsNew else { return }
+        pane.startsNew = false
+        groups[index].replace(pane)
         save()
     }
 
+    /// Session id → billing project, from the panes of every group.
+    var billingAssignments: [String: UUID] {
+        var map: [String: UUID] = [:]
+        for group in groups {
+            for pane in group.panes {
+                if let session = pane.sessionID, let project = group.project(of: pane) { map[session] = project }
+            }
+        }
+        return map
+    }
+
+    /// Opens the group, or brings its window forward on whatever screen or Space it's on.
     func open(_ id: UUID) {
         PanelController.shared.close()
-        if let controller = windows[id] {
+        if let controller = windows[id], let window = controller.window {
             NSApp.activate()
-            controller.window?.makeKeyAndOrderFront(nil)
+            if window.isMiniaturized { window.deminiaturize(nil) }
+            window.makeKeyAndOrderFront(nil)
             return
         }
         guard group(id) != nil else { return }
@@ -262,6 +295,7 @@ final class PaneHosts: ObservableObject {
             environment: environment.map { "\($0.key)=\($0.value)" },
             execName: "-" + URL(fileURLWithPath: shell).lastPathComponent
         )
+        if pane.startsNew { SessionGroups.shared.markStarted(pane.id) }
         return terminal
     }
 
@@ -491,6 +525,12 @@ struct GroupView: View {
             Toggle("Abrir al iniciar", isOn: Binding(get: { group.openAtLaunch }, set: { on in groups.change(groupID) { $0.openAtLaunch = on } }))
                 .toggleStyle(.checkbox)
                 .font(.system(size: 12))
+            ShortcutRecorder(current: group.shortcut) { groups.setShortcut($0, for: groupID) }
+                .font(.system(size: 12))
+            ProjectMenu(selected: group.project, suggestedName: group.name) { project in
+                groups.change(groupID) { $0.project = project }
+            }
+            .font(.system(size: 12))
             Spacer()
             Text("\(group.panes.count) de \(SessionGroup.maxPanes)")
                 .font(.system(size: 12))
@@ -596,6 +636,12 @@ struct PaneCell: View {
             Text(pane.title).font(.system(size: 12, weight: .medium)).lineLimit(1)
             Text(Accounts.name(pane.account)).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
             Spacer(minLength: 4)
+            ProjectMenu(selected: pane.project, inherited: SessionGroups.shared.group(groupID)?.project, isPane: true,
+                        cloud: pane.kind == .cloud, suggestedName: pane.title, folder: pane.directory) { project in
+                var changed = pane
+                changed.project = project
+                SessionGroups.shared.change(groupID) { $0.replace(changed) }
+            }
             Button { SessionGroups.shared.change(groupID) { $0.move(pane.id, by: -1) } } label: { Image(systemName: "chevron.left") }
                 .disabled(index == 0)
                 .help("Mover antes")
@@ -853,8 +899,10 @@ struct AddPaneView: View {
         panel.message = "Carpeta donde correrá la nueva sesión de Claude Code"
         guard panel.runModal() == .OK, let folder = panel.url else { return }
         let profile = Accounts.profile(localAccount)
+        // The session id is chosen here so its time and tokens can be billed from the first minute.
         let pane = SessionPane(kind: .local, title: folder.lastPathComponent, account: localAccount,
-                               directory: folder.path, configDir: profile?.codeConfigDir)
+                               sessionID: UUID().uuidString.lowercased(), directory: folder.path,
+                               configDir: profile?.codeConfigDir, startsNew: true)
         groups.add(pane, to: groupID)
     }
 
@@ -992,6 +1040,9 @@ struct GroupRow: View {
             if group.openAtLaunch {
                 Image(systemName: "power").font(.system(size: 10)).foregroundStyle(.tertiary).help("Se abre al iniciar")
             }
+            if let shortcut = group.shortcut {
+                Text(shortcut.display).font(.system(size: 11)).foregroundStyle(.tertiary).help("Tecla rápida")
+            }
             Text("\(group.panes.count)/\(SessionGroup.maxPanes)")
                 .font(.system(size: 11))
                 .monospacedDigit()
@@ -1005,6 +1056,11 @@ struct GroupRow: View {
             Button("Abrir") { groups.open(group.id) }
             Button(group.openAtLaunch ? "No abrir al iniciar" : "Abrir al iniciar") {
                 groups.change(group.id) { $0.openAtLaunch.toggle() }
+            }
+            if group.shortcut != nil {
+                Button("Quitar tecla rápida \(group.shortcut!.display)") { groups.setShortcut(nil, for: group.id) }
+            } else if let next = GroupShortcut.suggestion(taken: groups.groups.map(\.shortcut)) {
+                Button("Tecla rápida \(next.display)") { groups.setShortcut(next, for: group.id) }
             }
             Divider()
             Button("Eliminar grupo", role: .destructive) { groups.delete(group.id) }

@@ -408,6 +408,7 @@ final class Engine: ObservableObject {
                 })
             }
         }
+        keys += LoveployBridge.groupHotKeys()   // Loveploy: a shortcut per session group
         HotKey.register(keys)
     }
 
@@ -4489,6 +4490,8 @@ final class PanelController: ObservableObject {
     private var panel: KeyPanel?
     private var host: NSHostingView<MenuView>?
     private var monitor: Any?
+    private var localMonitor: Any?   // Loveploy
+    private var activation: NSObjectProtocol?   // Loveploy
     private var anchor = NSPoint.zero   // top-left corner in screen coordinates
 
     var isOpen: Bool { panel?.isVisible ?? false }
@@ -4510,6 +4513,26 @@ final class PanelController: ObservableObject {
         monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { _ in
             MainActor.assumeIsolated { PanelController.shared.close() }
         }
+        // Loveploy: a click in one of the app's own windows (a group, Lovable, settings) is not a
+        // global event, so the panel stayed open; close it on those too, and when another app
+        // comes forward.
+        localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .otherMouseDown]) { event in
+            MainActor.assumeIsolated {
+                let controller = PanelController.shared
+                if let window = event.window, window !== controller.panel, NSApp.modalWindow == nil,
+                   !String(describing: type(of: window)).contains("StatusBar") {
+                    controller.close()
+                }
+            }
+            return event
+        }
+        activation = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            guard app?.processIdentifier != ProcessInfo.processInfo.processIdentifier else { return }
+            MainActor.assumeIsolated { PanelController.shared.close() }
+        }
     }
 
     func close() {
@@ -4518,6 +4541,10 @@ final class PanelController: ObservableObject {
         panel?.orderOut(nil)
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
+        if let localMonitor { NSEvent.removeMonitor(localMonitor) }
+        localMonitor = nil
+        if let activation { NSWorkspace.shared.notificationCenter.removeObserver(activation) }
+        activation = nil
         closed += 1   // drops a half-typed rename or new profile, so the panel reopens clean
     }
     @Published var closed = 0
@@ -4560,7 +4587,13 @@ final class PanelController: ObservableObject {
             // A context menu takes key for a moment; only close once the menu is gone.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 MainActor.assumeIsolated {
-                    if NSApp.keyWindow == nil || NSApp.keyWindow is AboutWindowType { PanelController.shared.close() }
+                    // Loveploy: also when one of the app's own windows took key (not a menu, sheet or alert).
+                    let key = NSApp.keyWindow
+                    if key == nil || key is AboutWindowType
+                        || (key !== PanelController.shared.panel && NSApp.modalWindow == nil && key?.sheetParent == nil
+                            && key?.level == .normal) {
+                        PanelController.shared.close()
+                    }
                 }
             }
         }

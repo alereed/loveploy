@@ -40,6 +40,7 @@ enum LoveployBridge {
             .sink { _ in MainActor.assumeIsolated { Engine.shared.onChange?() } }
             .store(in: &observers)
         DevClock.shared.start()
+        Engine.shared.updateHotKeys()   // adds the groups' shortcuts
         SessionGroups.shared.openAtLaunch()
     }
 
@@ -80,6 +81,15 @@ enum LoveployBridge {
         NSApp.windowsMenu = window
 
         NSApp.mainMenu = main
+    }
+
+    /// Each group's shortcut brings its window forward, wherever it is.
+    static func groupHotKeys() -> [HotKey.Binding] {
+        SessionGroups.shared.groups.compactMap { group in
+            guard let shortcut = group.shortcut, shortcut.isUsable else { return nil }
+            let id = group.id
+            return HotKey.Binding(key: shortcut.keyCode, mods: shortcut.modifiers) { SessionGroups.shared.open(id) }
+        }
     }
 
     /// " ♥3" after the menu bar icon while Lovable projects are out of date.

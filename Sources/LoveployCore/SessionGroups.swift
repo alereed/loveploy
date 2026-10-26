@@ -74,11 +74,18 @@ public struct SessionPane: Codable, Identifiable, Hashable, Sendable {
     public var configDir: String?
     /// Cloud: the session's address.
     public var url: String?
+    /// Local: `sessionID` hasn't been used yet, so the pane starts it with `--session-id`
+    /// (and resumes it from then on). Knowing the id up front lets a new session be billed.
+    public var startsNew: Bool
+    /// The billing project this pane's time and tokens go to (nil: the group's).
+    public var project: UUID?
 
     public init(
         id: UUID = UUID(), kind: Kind, title: String, account: String? = nil, sessionID: String? = nil,
-        directory: String? = nil, configDir: String? = nil, url: String? = nil
+        directory: String? = nil, configDir: String? = nil, url: String? = nil, startsNew: Bool = false, project: UUID? = nil
     ) {
+        self.startsNew = startsNew
+        self.project = project
         self.id = id
         self.kind = kind
         self.title = title
@@ -116,7 +123,7 @@ public struct SessionPane: Codable, Identifiable, Hashable, Sendable {
             parts.append("cd \(Self.quote(directory))")
         }
         if let sessionID, !sessionID.isEmpty {
-            parts.append("exec claude --resume \(Self.quote(sessionID))")
+            parts.append("exec claude \(startsNew ? "--session-id" : "--resume") \(Self.quote(sessionID))")
         } else {
             parts.append("exec claude")
         }
@@ -131,7 +138,7 @@ public struct SessionPane: Codable, Identifiable, Hashable, Sendable {
 
     static func quote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
 
-    enum CodingKeys: String, CodingKey { case id, kind, title, account, sessionID, directory, configDir, url }
+    enum CodingKeys: String, CodingKey { case id, kind, title, account, sessionID, directory, configDir, url, startsNew, project }
 
     // Lenient: a pane saved by another version still loads.
     public init(from decoder: Decoder) throws {
@@ -144,6 +151,8 @@ public struct SessionPane: Codable, Identifiable, Hashable, Sendable {
         directory = try? c.decodeIfPresent(String.self, forKey: .directory)
         configDir = try? c.decodeIfPresent(String.self, forKey: .configDir)
         url = try? c.decodeIfPresent(String.self, forKey: .url)
+        startsNew = (try? c.decodeIfPresent(Bool.self, forKey: .startsNew)) ?? false
+        project = try? c.decodeIfPresent(UUID.self, forKey: .project)
     }
 }
 
@@ -157,16 +166,25 @@ public struct SessionGroup: Codable, Identifiable, Hashable, Sendable {
     public var layout: PaneLayout
     /// Opened by "Abrir al iniciar" with the app.
     public var openAtLaunch: Bool
+    /// A global key that brings the group's window forward, wherever it is.
+    public var shortcut: GroupShortcut?
+    /// The billing project for panes that don't name their own.
+    public var project: UUID?
 
-    public init(id: UUID = UUID(), name: String, panes: [SessionPane] = [], layout: PaneLayout = .grid, openAtLaunch: Bool = false) {
+    public init(id: UUID = UUID(), name: String, panes: [SessionPane] = [], layout: PaneLayout = .grid, openAtLaunch: Bool = false, shortcut: GroupShortcut? = nil, project: UUID? = nil) {
+        self.project = project
         self.id = id
         self.name = name
         self.panes = Array(panes.prefix(Self.maxPanes))
         self.layout = layout
         self.openAtLaunch = openAtLaunch
+        self.shortcut = shortcut
     }
 
     public var isFull: Bool { panes.count >= Self.maxPanes }
+
+    /// The project a pane bills to: its own, else the group's.
+    public func project(of pane: SessionPane) -> UUID? { pane.project ?? project }
 
     /// Adds a pane at the end. False when the group already has eight.
     @discardableResult
@@ -192,7 +210,7 @@ public struct SessionGroup: Codable, Identifiable, Hashable, Sendable {
         panes.swapAt(index, target)
     }
 
-    enum CodingKeys: String, CodingKey { case id, name, panes, layout, openAtLaunch }
+    enum CodingKeys: String, CodingKey { case id, name, panes, layout, openAtLaunch, shortcut, project }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -201,6 +219,59 @@ public struct SessionGroup: Codable, Identifiable, Hashable, Sendable {
         panes = Array(((try? c.decodeIfPresent([SessionPane].self, forKey: .panes)) ?? []).prefix(Self.maxPanes))
         layout = (try? c.decodeIfPresent(PaneLayout.self, forKey: .layout)) ?? .grid
         openAtLaunch = (try? c.decodeIfPresent(Bool.self, forKey: .openAtLaunch)) ?? false
+        shortcut = try? c.decodeIfPresent(GroupShortcut.self, forKey: .shortcut)
+        project = try? c.decodeIfPresent(UUID.self, forKey: .project)
+    }
+}
+
+/// A key and its modifiers, as Carbon's RegisterEventHotKey takes them.
+public struct GroupShortcut: Codable, Hashable, Sendable {
+    // Carbon modifier bits (Events.h), so the UI and the hot key agree without importing Carbon here.
+    public static let command = 0x100, shift = 0x200, option = 0x800, control = 0x1000
+
+    /// Virtual key code (kVK_…).
+    public var keyCode: Int
+    /// Carbon modifier mask.
+    public var modifiers: Int
+    /// What the key shows, e.g. "1" or "G".
+    public var key: String
+
+    public init(keyCode: Int, modifiers: Int, key: String) {
+        self.keyCode = keyCode
+        self.modifiers = modifiers
+        self.key = key
+    }
+
+    /// A global shortcut needs ⌘, ⌃ or ⌥; ⇧ alone would eat ordinary typing.
+    public var isUsable: Bool {
+        modifiers & (Self.command | Self.control | Self.option) != 0 && !key.isEmpty
+    }
+
+    /// "⌃⌥⌘1", in the order macOS menus use.
+    public var display: String {
+        var text = ""
+        if modifiers & Self.control != 0 { text += "⌃" }
+        if modifiers & Self.option != 0 { text += "⌥" }
+        if modifiers & Self.shift != 0 { text += "⇧" }
+        if modifiers & Self.command != 0 { text += "⌘" }
+        return text + key.uppercased()
+    }
+
+    /// ⌃⌥⌘ and the first digit 1–9 no other group uses (the profiles already use ⌃⌥ + digit).
+    public static func suggestion(taken: [GroupShortcut?]) -> GroupShortcut? {
+        let digitCodes = [0x12, 0x13, 0x14, 0x15, 0x17, 0x16, 0x1A, 0x1C, 0x19]   // kVK_ANSI_1 … kVK_ANSI_9
+        let mods = command | option | control
+        for (index, code) in digitCodes.enumerated() {
+            let candidate = GroupShortcut(keyCode: code, modifiers: mods, key: String(index + 1))
+            if !taken.contains(where: { $0?.keyCode == code && $0?.modifiers == mods }) { return candidate }
+        }
+        return nil
+    }
+
+    /// Same key and modifiers (the label doesn't matter).
+    public func sameKeys(as other: GroupShortcut?) -> Bool {
+        guard let other else { return false }
+        return keyCode == other.keyCode && modifiers == other.modifiers
     }
 }
 
