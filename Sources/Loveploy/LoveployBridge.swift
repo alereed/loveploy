@@ -1,0 +1,131 @@
+import AppKit
+import Combine
+import LoveployCore
+import SwiftUI
+
+/// Joins Loveploy's own features (Lovable deploys, session groups) to the account manager in
+/// main.swift, which calls into here at the few places marked "Loveploy:".
+@MainActor
+enum LoveployBridge {
+    private(set) static var model: AppModel?
+    private static var observers = Set<AnyCancellable>()
+    /// Where MultiClaude kept its settings, for a first launch on a Mac that already used it.
+    static let multiClaudeDomain = "me.somalabs.multiclaude"
+
+    /// Brings over MultiClaude's profiles and settings the first time, if it was installed.
+    static func migrateDefaults() {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: "profiles") == nil,
+              let ours = Bundle.main.bundleIdentifier, ours != multiClaudeDomain,
+              var old = defaults.persistentDomain(forName: multiClaudeDomain), !old.isEmpty else { return }
+        // Not the update bookkeeping of the other app.
+        for key in ["updatedTo", "lastUpdateCheck"] { old[key] = nil }
+        var mine = defaults.persistentDomain(forName: ours) ?? [:]
+        mine.merge(old) { current, _ in current }
+        defaults.setPersistentDomain(mine, forName: ours)
+    }
+
+    static func start() {
+        let model = AppModel()
+        self.model = model
+        // The menu bar shows how many projects wait to publish.
+        model.objectWillChange
+            .debounce(for: .milliseconds(300), scheduler: DispatchQueue.main)
+            .sink { _ in MainActor.assumeIsolated { Engine.shared.onChange?() } }
+            .store(in: &observers)
+        SessionGroups.shared.openAtLaunch()
+    }
+
+    /// " ♥3" after the menu bar icon while Lovable projects are out of date.
+    static var menuBarSuffix: String {
+        guard let model, model.pendingCount > 0 else { return "" }
+        return " ♥\(model.pendingCount)"
+    }
+}
+
+/// The panel sections Loveploy adds: Lovable and session groups.
+struct LoveploySections: View {
+    @AppStorage("loveploy.lovableOpen") private var lovableOpen = true
+    @AppStorage("loveploy.groupsOpen") private var groupsOpen = true
+
+    var body: some View {
+        if let model = LoveployBridge.model {
+            LovableSection(model: model, open: $lovableOpen)
+        }
+        GroupsSection(groups: SessionGroups.shared, open: $groupsOpen)
+    }
+}
+
+struct LovableSection: View {
+    @ObservedObject var model: AppModel
+    @Binding var open: Bool
+
+    var body: some View {
+        Divider().padding(.horizontal, 14)
+        SectionHeader(title: "Lovable", trailing: trailing, open: $open)
+        if open {
+            VStack(spacing: 0) {
+                if model.isSignedIn {
+                    ToggleRow(symbol: "bolt.fill", title: "Turbo", hint: model.turbo ? "publica solo" : nil, on: model.turbo) {
+                        model.turbo.toggle()
+                    }
+                    if !model.selectedRows.isEmpty {
+                        PlainRow(title: model.isDeploying ? "Publicando…" : publishTitle) {
+                            if !model.isDeploying { model.deploySelected() }
+                        }
+                    }
+                    if model.iosNeedingUpload > 0 {
+                        PlainRow(title: "\(model.iosNeedingUpload) app(s) de iOS sin TestFlight…") { LovableWindow.show(filter: .ios) }
+                    }
+                    PlainRow(title: "Abrir proyectos…") { LovableWindow.show() }
+                } else {
+                    PlainRow(title: "Iniciar sesión en Lovable…") {
+                        PanelController.shared.close()
+                        model.signIn()
+                    }
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.bottom, 5)
+        }
+    }
+
+    private var trailing: String {
+        guard model.isSignedIn else { return "Sin sesión" }
+        if model.isRefreshing && model.rows.isEmpty { return "Cargando…" }
+        return model.pendingCount == 0 ? "Al día" : "\(model.pendingCount) por publicar"
+    }
+
+    private var publishTitle: String {
+        let count = model.selectedRows.count
+        return count == 1 ? "Publicar 1 proyecto" : "Publicar \(count) proyectos"
+    }
+}
+
+/// The full Lovable list (what used to be Loveploy's whole menu), in a window.
+@MainActor
+enum LovableWindow {
+    private static var window: NSWindow?
+
+    static func show(filter: AppModel.Filter? = nil) {
+        guard let model = LoveployBridge.model else { return }
+        if let filter { model.filter = filter }
+        PanelController.shared.close()
+        if window == nil {
+            let w = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 440, height: 620),
+                styleMask: [.titled, .closable, .resizable, .miniaturizable],
+                backing: .buffered,
+                defer: false
+            )
+            w.title = "Lovable · Loveploy"
+            w.isReleasedWhenClosed = false
+            w.contentView = NSHostingView(rootView: LovableView().environmentObject(model))
+            w.setFrameAutosaveName("LoveployLovableWindow")
+            if !w.setFrameUsingName("LoveployLovableWindow") { w.center() }
+            window = w
+        }
+        NSApp.activate()
+        window?.makeKeyAndOrderFront(nil)
+    }
+}

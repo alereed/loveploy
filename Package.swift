@@ -1,4 +1,4 @@
-// swift-tools-version:5.9
+// swift-tools-version:6.0
 import PackageDescription
 
 var targets: [Target] = [
@@ -8,17 +8,27 @@ var targets: [Target] = [
 var products: [Product] = [
     .library(name: "LoveployCore", targets: ["LoveployCore"]),
 ]
+var dependencies: [Package.Dependency] = []
 
 // The menu bar app itself needs AppKit/SwiftUI, so it only exists on macOS.
-// The core (API client, state, logic) also builds on Linux for CI and tests.
+// The core (clients, state, logic) also builds on Linux for CI and tests.
 #if os(macOS)
-targets.append(.executableTarget(name: "Loveploy", dependencies: ["LoveployCore"]))
+// SwiftTerm: the terminal panes of session groups (MIT).
+dependencies.append(.package(url: "https://github.com/migueldeicaza/SwiftTerm", .upToNextMinor(from: "1.20.0")))
+targets.append(.executableTarget(
+    name: "Loveploy",
+    dependencies: ["LoveployCore", .product(name: "SwiftTerm", package: "SwiftTerm")]
+))
 products.append(.executable(name: "Loveploy", targets: ["Loveploy"]))
 #endif
 
 let package = Package(
     name: "Loveploy",
-    platforms: [.macOS(.v13)],
+    // macOS 15: the account manager (MultiClaude) uses its APIs.
+    platforms: [.macOS(.v15)],
     products: products,
-    targets: targets
+    dependencies: dependencies,
+    targets: targets,
+    // Swift 5 language mode: the account manager is written for it.
+    swiftLanguageModes: [.v5]
 )

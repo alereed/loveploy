@@ -2,7 +2,8 @@ import AppKit
 import LoveployCore
 import SwiftUI
 
-struct MenuView: View {
+/// Lovable projects: what to publish, Turbo, GitHub and iOS. Shown in its own window from the panel.
+struct LovableView: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
@@ -10,7 +11,7 @@ struct MenuView: View {
             header
             Divider()
             if model.showingSettings {
-                SettingsView()
+                LovableSettingsView()
             } else if !model.isSignedIn {
                 signedOut
             } else {

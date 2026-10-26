@@ -14,6 +14,11 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Loveploy"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 
+# The icon is drawn by the app itself.
+"$APP/Contents/MacOS/Loveploy" --export-iconset dist/Loveploy.iconset
+iconutil -c icns dist/Loveploy.iconset -o "$APP/Contents/Resources/Loveploy.icns"
+rm -rf dist/Loveploy.iconset
+
 # Ad-hoc signature so macOS runs it locally. Downloaded builds still need
 # right click → Open the first time (they aren't notarized).
 codesign --force --deep --sign - "$APP"
@@ -22,6 +27,7 @@ codesign --force --deep --sign - "$APP"
 echo "Listo: $APP"
 
 if [[ "${1:-}" == "--install" ]]; then
+    pkill -x Loveploy || true
     rm -rf /Applications/Loveploy.app
     cp -R "$APP" /Applications/
     echo "Instalado en /Applications/Loveploy.app"

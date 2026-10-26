@@ -13,16 +13,41 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.0</string>
+    <string>0.2.0</string>
     <key>CFBundleVersion</key>
-    <string>1</string>
+    <string>2</string>
+    <key>CFBundleIconFile</key>
+    <string>Loveploy</string>
     <key>LSMinimumSystemVersion</key>
-    <string>13.0</string>
+    <string>15.0</string>
     <key>LSUIElement</key>
     <true/>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.developer-tools</string>
+    <key>CFBundleURLTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>Claude sign-in relay</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>claude</string>
+            </array>
+            <key>LSHandlerRank</key>
+            <string>None</string>
+        </dict>
+        <dict>
+            <key>CFBundleURLName</key>
+            <string>Profile apps</string>
+            <key>CFBundleURLSchemes</key>
+            <array>
+                <string>multiclaude</string>
+            </array>
+        </dict>
+    </array>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Loveploy pasa el enlace de inicio de sesión de Claude a la ventana de la cuenta que lo pidió.</string>
     <key>NSHumanReadableCopyright</key>
-    <string>Blender</string>
+    <string>Incluye MultiClaude © 2026 Soma Labs (Apache 2.0).</string>
 </dict>
 </plist>

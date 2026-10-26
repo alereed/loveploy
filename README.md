@@ -1,14 +1,33 @@
 # Loveploy
 
-App de barra de menú para Mac que publica de un clic todos tus proyectos de [Lovable](https://lovable.dev) que estén desactualizados.
+App de barra de menú para Mac que junta tres cosas:
+
+1. **Tus cuentas de Claude, abiertas a la vez.** Es [MultiClaude](https://github.com/QuentinCar0n/multiclaude) de Soma Labs, incluido completo: un perfil por cuenta, colores, una app por perfil, Claude Code por cuenta, uso de tokens, mantener la Mac despierta y lo demás.
+2. **Grupos de sesiones de Claude Code.** Guarda grupos de hasta 8 sesiones (de esta Mac o de claude.ai/code, de cualquier cuenta) y ábrelas de un clic en una ventana dividida.
+3. **Publicar Lovable.** Publica de un clic los proyectos de [Lovable](https://lovable.dev) que estén desactualizados, con modo Turbo, GitHub e iOS.
+
+## 🪟 Grupos de sesiones
+
+Un grupo es un escenario de trabajo: hasta **8 sesiones de Claude Code** que se abren juntas en **una ventana dividida**, como en Claude desktop, acomodadas como tú decidas.
+
+- **Sesiones de esta Mac**: Loveploy lista las sesiones de Claude Code de cada cuenta (las de la terminal y las del Code tab de la app) con su título, proyecto y cuenta. Cada panel es una terminal que reanuda la sesión con `claude --resume` en su carpeta, con la cuenta correcta (`CLAUDE_CONFIG_DIR` del perfil). También puedes empezar una sesión nueva en la carpeta que elijas.
+- **Sesiones de la nube**: pega la dirección de una sesión de claude.ai/code (o crea una nueva) y elige la cuenta. Cada cuenta guarda su propio inicio de sesión de claude.ai, así que en un mismo grupo puedes mezclar cuentas.
+- **Acomodo**: cuadrícula, columnas, filas o uno grande y el resto a un lado. Los divisores se arrastran, y cada panel se puede mover antes o después, reiniciar, abrir en Terminal o en el navegador, o quitar.
+- **Varias ventanas**: cada grupo tiene su propia ventana y recuerda en qué pantalla estaba, en qué posición y de qué tamaño. Puedes tener varias abiertas a la vez, una por escenario.
+- **De un botón**: en el panel de la barra, clic en un grupo lo abre tal como lo dejaste, y **Abrir todos** abre todos tus escenarios a la vez. Los marcados con **Abrir al iniciar** se abren solos al arrancar Loveploy.
+
+Mientras hay una ventana de grupo abierta, Loveploy aparece en el Dock y en ⌘-Tab como cualquier app. Al cerrar un grupo con sesiones locales, Loveploy avisa: las sesiones quedan guardadas y se reanudan al volver a abrirlo.
+
+## 🚀 Lovable
+
+En el panel, la sección **Lovable** muestra cuántos proyectos faltan por publicar, el interruptor de Turbo y el botón para publicarlos. **Abrir proyectos…** abre la lista completa en su propia ventana. El ícono de la barra suma `♥N` cuando hay proyectos por publicar.
 
 - **Sin API keys ni MCP.** Inicias sesión en lovable.dev dentro de la app (Google, GitHub o correo, como siempre) y Loveploy usa esa misma sesión, igual que el navegador.
-- El ícono de la barra muestra cuántos proyectos tienen cambios sin publicar.
-- Al darle clic se abre la lista de todos tus proyectos, de todos tus workspaces, con su estado: **Desactualizado**, **Al día** o **Sin publicar**.
+- La lista muestra todos tus proyectos, de todos tus workspaces, con su estado: **Desactualizado**, **Al día** o **Sin publicar**.
 - Con las casillas eliges cuáles entran a la lista de despliegue. Si quitas uno desactualizado, Loveploy lo recuerda y no lo vuelve a incluir.
 - **Publicar N proyectos** los publica (3 a la vez) igual que el botón Publish / Update de Lovable, muestra el paso en que va cada uno y te avisa con una notificación al terminar.
 
-## ⚡ Turbo: publicar automáticamente
+### ⚡ Turbo: publicar automáticamente
 
 Activa **Turbo** con el botón ⚡ del menú (o en Ajustes) y Loveploy publica solo cada proyecto en cuanto se desactualiza:
 
@@ -20,7 +39,7 @@ Activa **Turbo** con el botón ⚡ del menú (o en Ajustes) y Loveploy publica s
 
 La Mac tiene que estar encendida con Loveploy abierto; para que arranque solo, activa **Abrir al iniciar sesión en la Mac** en Ajustes.
 
-## 📱 Apps de iOS: TestFlight y App Store
+### 📱 Apps de iOS: TestFlight y App Store
 
 Para los proyectos que tienen app de iOS en Lovable, cada fila muestra dos líneas más, y la pestaña **iOS** junta solo esos proyectos:
 
@@ -97,8 +116,11 @@ Estos endpoints son internos de la web de Lovable, no una API documentada. Si Lo
 
 ## Requisitos
 
-- macOS 13 (Ventura) o más nuevo.
+- macOS 15 (Sequoia) o más nuevo.
+- La [app de Claude](https://claude.ai/download) en `/Applications` para las cuentas, y [Claude Code](https://docs.claude.com/en/docs/claude-code) instalado para las sesiones locales.
 - Una cuenta de Lovable con permiso para publicar los proyectos. No importa el plan.
+
+Si ya usabas MultiClaude, la primera vez Loveploy toma sus perfiles y ajustes. Cierra MultiClaude y quítalo: los dos manejan las mismas ventanas de Claude y los mismos enlaces de inicio de sesión, así que no deben correr a la vez. Loveploy no se actualiza solo desde los releases de MultiClaude.
 
 ## Instalar
 
@@ -108,7 +130,7 @@ Cada push a `main` compila la app. En la pestaña **Actions** abre la última ej
 
 ### Compilando en tu Mac
 
-Necesitas Xcode o las Command Line Tools (`xcode-select --install`).
+Necesitas Xcode 16 o más nuevo (`xcode-select --install` para las Command Line Tools).
 
 ```bash
 git clone https://github.com/alereed/loveploy.git
@@ -120,18 +142,22 @@ Eso compila `dist/Loveploy.app` (universal, Apple Silicon e Intel), la copia a `
 
 ## Uso
 
-1. Clic en el ícono ♥ de la barra de menú → **Iniciar sesión en Lovable** y entra como siempre.
-2. En **Pendientes** ves lo que falta publicar; en **Todos**, todos tus proyectos.
-3. Marca o desmarca lo que quieras y dale **Publicar** (o Enter).
-4. Clic derecho en un proyecto para abrirlo en Lovable, abrir el sitio publicado o abrir el repo.
-
-La lista se actualiza sola cada 15 minutos y cada vez que abres el menú. En Ajustes puedes activar **Abrir al iniciar sesión en la Mac**.
+1. Clic en el ✳ de la barra de menú. Ahí están tus cuentas de Claude, los grupos de sesiones y la sección Lovable.
+2. **Grupos de sesiones → Nuevo grupo…**, ponle nombre y en su ventana usa **Agregar sesión** para llenarlo (hasta 8). Elige el acomodo arriba.
+3. **Lovable → Iniciar sesión en Lovable…** la primera vez; luego **Abrir proyectos…** para ver la lista, marcar y publicar.
+4. En **Settings** están las opciones de cuentas de Claude, incluida **Launch at Login**.
 
 ## Estructura
 
 ```
-Sources/LoveployCore/   Sesión, clientes de lovable.dev, GitHub y Blender Dev Apps, regla de desactualizado, despliegue (también compila en Linux)
-Sources/Loveploy/       App SwiftUI de barra de menú y ventana de login con WebKit
-Tests/                  Pruebas del núcleo: swift test
-scripts/build-app.sh    Arma Loveploy.app
+Sources/LoveployCore/            Sesión y clientes de lovable.dev, GitHub y Blender Dev Apps; regla de desactualizado;
+                                 despliegue; grupos de sesiones (también compila en Linux)
+Sources/Loveploy/main.swift      MultiClaude 1.6.1 (Apache 2.0), con los cambios marcados "Loveploy:"
+Sources/Loveploy/                Lovable, grupos de sesiones (terminales con SwiftTerm y paneles web) y login con WebKit
+Tests/                           Pruebas del núcleo: swift test
+scripts/build-app.sh             Arma Loveploy.app
 ```
+
+## Licencias
+
+Loveploy se publica bajo la licencia MIT (`LICENSE`). Incluye MultiClaude de Soma Labs bajo la Apache License 2.0 (`LICENSE-MultiClaude` y `NOTICE`) y usa [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (MIT) para las terminales.

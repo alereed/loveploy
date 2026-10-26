@@ -1,7 +1,7 @@
 import LoveployCore
 import SwiftUI
 
-struct SettingsView: View {
+struct LovableSettingsView: View {
     @EnvironmentObject var model: AppModel
     @State private var githubToken = ""
     @State private var isConnecting = false
@@ -153,10 +153,6 @@ struct SettingsView: View {
 
     private var preferencesSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Toggle("Abrir al iniciar sesión en la Mac", isOn: Binding(
-                get: { model.launchAtLogin },
-                set: { model.launchAtLogin = $0 }
-            ))
             Button("Volver a incluir proyectos excluidos (\(model.state.excluded.count))") {
                 model.resetExclusions()
             }
