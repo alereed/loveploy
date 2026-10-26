@@ -226,6 +226,7 @@ struct GroupsManagerView: View {
                     .onSubmit(create)
                 Button("Crear grupo", action: create).buttonStyle(.borderedProminent)
             }
+            MemorySaverSettings()
             List {
                 ForEach(groups.groups) { group in
                     GroupManagerRow(group: group)
@@ -289,5 +290,30 @@ struct GroupManagerRow: View {
         .padding(.vertical, 4)
         .onAppear { name = group.name }
         .onChange(of: group.name) { name = group.name }
+    }
+}
+
+/// How long unused panes stay loaded before they pause.
+struct MemorySaverSettings: View {
+    @AppStorage("loveploy.sleepWebMinutes") private var webMinutes = 10
+    @AppStorage("loveploy.sleepTerminalMinutes") private var terminalMinutes = 30
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Label("Ahorro de memoria", systemImage: "moon.zzz").font(.system(size: 13, weight: .semibold))
+            Picker("Paneles web", selection: $webMinutes) {
+                Text("Siempre cargados").tag(0)
+                ForEach([5, 10, 15, 30], id: \.self) { Text("pausar tras \($0) min sin usar").tag($0) }
+            }
+            .fixedSize()
+            Picker("Terminales", selection: $terminalMinutes) {
+                Text("Siempre abiertas").tag(0)
+                ForEach([15, 30, 60, 120], id: \.self) { Text("pausar tras \($0) min sin actividad").tag($0) }
+            }
+            .fixedSize()
+            Spacer()
+        }
+        .font(.system(size: 12))
+        .help("Los paneles web se pausan cuando llevas ese tiempo fuera de su ventana y sin usarlos; vuelven al regresar a la ventana. Las terminales se pausan cuando Claude Code lleva ese tiempo sin escribir ni recibir nada, y se reanudan con un clic. El panel en el que estás escribiendo nunca se pausa.")
     }
 }

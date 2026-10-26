@@ -36,7 +36,8 @@ El panel de la barra de menú muestra solo lo de todos los días: tus grupos (un
 ## 🪶 Memoria
 
 - Las horas y tokens se leen de las transcripciones sin cargar cada línea completa (pueden pesar megas), así que la memoria no crece con el historial.
-- Cada panel web dentro de Loveploy es un proceso de WebKit; al minimizar la ventana del grupo se liberan y vuelven al mostrarla. Las **ventanas de Chrome** no gastan memoria extra en Loveploy.
+- Cada panel web dentro de Loveploy es un proceso de WebKit; al minimizar la ventana del grupo se liberan y vuelven al mostrarla.
+- **Ahorro de memoria** (en Grupos de sesiones de la ventana de Loveploy): los paneles web se pausan cuando llevas 10 minutos fuera de su ventana sin usarlos y vuelven al regresar a ella; las terminales de Claude Code se pausan tras 30 minutos sin escribir ni recibir nada y se reanudan con un clic donde iban (`claude --resume`). El panel en el que escribes nunca se pausa. Los tiempos se ajustan o se apagan, y **Liberar memoria** en la ventana del grupo pausa ya todo lo que no estás usando. Las **ventanas de Chrome** no gastan memoria extra en Loveploy.
 - Cada sesión local es un proceso de Claude Code: ocho sesiones abiertas son ocho procesos.
 
 ## 💼 Proyectos y cobro

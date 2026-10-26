@@ -61,6 +61,9 @@ final class SessionGroups: ObservableObject {
         save()
     }
 
+    /// Pauses every pane of the group you're not using right now.
+    func freeMemory(_ id: UUID) { windows[id]?.sweep(force: true) }
+
     /// Every pane of the group's window the same width (and the same height in each column).
     func equalize(_ id: UUID) {
         windows[id]?.equalize()
@@ -244,6 +247,7 @@ final class GroupWindowController: NSWindowController, NSWindowDelegate {
         let name = "LoveployGroup-\(groupID.uuidString)"
         if !window.setFrameUsingName(name) { window.center() }
         window.setFrameAutosaveName(name)
+        startSweeping()
     }
 
     @available(*, unavailable)
@@ -284,6 +288,31 @@ final class GroupWindowController: NSWindowController, NSWindowDelegate {
         for child in view.subviews { equalize(child) }
     }
 
+    // MARK: Memory saver
+
+    private var sweeper: Timer?
+    private var awaySince: Date?
+
+    func startSweeping() {
+        guard sweeper == nil else { return }
+        sweeper = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.sweep() }
+        }
+        RunLoop.main.add(sweeper!, forMode: .common)
+    }
+
+    func sweep(force: Bool = false) {
+        guard let group = SessionGroups.shared.group(groupID) else { return }
+        hosts.sweep(group, window: window, awaySince: window?.isKeyWindow == true ? nil : (awaySince ?? Date()), force: force)
+    }
+
+    func windowDidResignKey(_ notification: Notification) { awaySince = Date() }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        awaySince = nil
+        if let group = SessionGroups.shared.group(groupID) { hosts.wakeWeb(group) }
+    }
+
     // Chrome panes follow the window when it moves or changes size.
     private var follow: DispatchWorkItem?
 
@@ -305,6 +334,8 @@ final class GroupWindowController: NSWindowController, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        sweeper?.invalidate()
+        sweeper = nil
         hosts.terminateAll()
         SessionGroups.shared.windowClosed(groupID)
     }
@@ -316,6 +347,9 @@ final class GroupWindowController: NSWindowController, NSWindowDelegate {
 @MainActor
 final class PaneHosts: ObservableObject {
     @Published private(set) var ended: [UUID: String] = [:]
+    /// Panes let go to save memory; they come back on a click (or, for web panes, when you
+    /// return to the window).
+    @Published private(set) var sleeping: Set<UUID> = []
     private var views: [UUID: NSView] = [:]
     private var observers: [UUID: TerminalObserver] = [:]
     private var popups: [WebPopups] = []
@@ -363,12 +397,62 @@ final class PaneHosts: ObservableObject {
 
     func resume() { objectWillChange.send() }
 
+    // MARK: Memory saver
+
+    func sleep(_ id: UUID) {
+        guard !sleeping.contains(id) else { return }
+        sleeping.insert(id)   // first, so the terminal's exit isn't reported as an ending
+        drop(id)
+        if views.values.allSatisfy({ !($0 is WKWebView) }) { popups = [] }
+    }
+
+    func wake(_ id: UUID) {
+        guard sleeping.remove(id) != nil else { return }
+        PaneUse.touch(id)
+        objectWillChange.send()
+    }
+
+    /// Web panes come back as soon as you return to their window; terminals on a click
+    /// (resuming a Claude Code session takes a few seconds).
+    func wakeWeb(_ group: SessionGroup) {
+        for pane in group.panes where pane.kind == .cloud && sleeping.contains(pane.id) { wake(pane.id) }
+    }
+
+    /// Puts to sleep what hasn't been used: web panes of a window you left more than N
+    /// minutes ago, and Claude Code terminals with no input or output for M minutes. The pane
+    /// you're typing in is never touched. `force` sleeps every other web pane now, and
+    /// terminals idle for 2 minutes.
+    func sweep(_ group: SessionGroup, window: NSWindow?, awaySince: Date?, force: Bool = false) {
+        let webLimit = MemorySaver.webMinutes * 60, terminalLimit = MemorySaver.terminalMinutes * 60
+        let now = Date()
+        let focused = window?.firstResponder as? NSView
+        for pane in group.panes where !sleeping.contains(pane.id) {
+            guard let view = views[pane.id] else { continue }
+            if let focused, focused === view || focused.isDescendant(of: view) { continue }
+            switch pane.kind {
+            case .cloud:
+                let away = awaySince.map { now.timeIntervalSince($0) } ?? 0
+                let idle = now.timeIntervalSince(PaneUse.last[pane.id] ?? .distantPast)
+                if force || (webLimit > 0 && away > Double(webLimit) && idle > Double(webLimit)) { sleep(pane.id) }
+            case .local:
+                // Only sessions that can be resumed, and never while Claude Code is writing.
+                guard let terminal = view as? TrackedTerminal, terminal.process?.running == true,
+                      pane.sessionID != nil, !pane.startsNew else { continue }
+                let idle = now.timeIntervalSince(terminal.lastUse)
+                if (force && idle > 120) || (terminalLimit > 0 && idle > Double(terminalLimit)) { sleep(pane.id) }
+            case .chrome:
+                continue
+            }
+        }
+    }
+
     // A terminal running Claude Code through the user's login shell, signed in as the pane's account.
     private func makeTerminal(_ pane: SessionPane) -> NSView {
-        let terminal = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 640, height: 420))
+        let terminal = TrackedTerminal(frame: NSRect(x: 0, y: 0, width: 640, height: 420))
         terminal.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
         let observer = TerminalObserver(paneID: pane.id) { [weak self] id, code in
-            self?.ended[id] = code == 0 || code == nil ? "La sesión terminó." : "Claude Code salió con código \(code!)."
+            guard let self, !self.sleeping.contains(id) else { return }
+            self.ended[id] = code == 0 || code == nil ? "La sesión terminó." : "Claude Code salió con código \(code!)."
         }
         observers[pane.id] = observer
         terminal.processDelegate = observer
@@ -400,6 +484,7 @@ final class PaneHosts: ObservableObject {
         }
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         PaneActivity.install(in: configuration, pane: pane.id)
+        PaneUse.touch(pane.id)
         let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 420), configuration: configuration)
         web.customUserAgent = LovableWeb.userAgent
         web.allowsBackForwardNavigationGestures = true
@@ -419,6 +504,54 @@ final class PaneHosts: ObservableObject {
             if FileManager.default.isExecutableFile(atPath: path) { return path }
         }
         return "/bin/zsh"
+    }
+}
+
+/// A terminal that knows when it was last used (typed into, or written to by Claude Code).
+final class TrackedTerminal: LocalProcessTerminalView {
+    private(set) var lastUse = Date()
+
+    override func dataReceived(slice: ArraySlice<UInt8>) {
+        lastUse = Date()
+        super.dataReceived(slice: slice)
+    }
+
+    override func send(source: TerminalView, data: ArraySlice<UInt8>) {
+        lastUse = Date()
+        super.send(source: source, data: data)
+    }
+}
+
+/// When each web pane was last used (input, or new text from Claude).
+@MainActor
+enum PaneUse {
+    static var last: [UUID: Date] = [:]
+    static func touch(_ id: UUID) { last[id] = Date() }
+}
+
+/// How long unused panes stay loaded (0 = always).
+enum MemorySaver {
+    static var webMinutes: Int { UserDefaults.standard.object(forKey: "loveploy.sleepWebMinutes") as? Int ?? 10 }
+    static var terminalMinutes: Int { UserDefaults.standard.object(forKey: "loveploy.sleepTerminalMinutes") as? Int ?? 30 }
+}
+
+/// A paused pane: nothing loaded, one click brings it back where it was.
+struct SleepingPaneView: View {
+    let pane: SessionPane
+    let wake: () -> Void
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: "moon.zzz").font(.system(size: 26)).foregroundStyle(.secondary)
+            Text("En pausa para ahorrar memoria").font(.headline)
+            Text(pane.kind == .local ? "La sesión de Claude Code sigue guardada y se reanuda donde iba." : "Vuelve a cargar la página donde estaba.")
+                .font(.caption).foregroundStyle(.secondary)
+            Button("Reanudar", action: wake).buttonStyle(.borderedProminent)
+        }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .contentShape(Rectangle())
+        .onTapGesture(perform: wake)
     }
 }
 
@@ -618,6 +751,11 @@ struct GroupView: View {
                 .toggleStyle(.checkbox)
                 .font(.system(size: 12))
             Button {
+                groups.freeMemory(groupID)
+            } label: { Label("Liberar memoria", systemImage: "moon.zzz") }
+            .font(.system(size: 12))
+            .help("Pone en pausa los paneles que no estás usando; vuelven con un clic")
+            Button {
                 groups.equalize(groupID)
             } label: { Label("Igualar", systemImage: "equal.square") }
             .font(.system(size: 12))
@@ -721,6 +859,8 @@ struct PaneCell: View {
             ZStack {
                 if pane.kind == .chrome {
                     ChromePaneView(pane: pane, groupID: groupID)
+                } else if hosts.sleeping.contains(pane.id) {
+                    SleepingPaneView(pane: pane) { hosts.wake(pane.id) }
                 } else {
                     PaneHostView(pane: pane, hosts: hosts)
                 }

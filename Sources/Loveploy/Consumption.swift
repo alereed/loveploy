@@ -116,7 +116,10 @@ final class PaneActivity: NSObject, WKScriptMessageHandler {
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         let pane = pane
-        MainActor.assumeIsolated { DevClock.shared.record(pane: pane) }
+        MainActor.assumeIsolated {
+            PaneUse.touch(pane)
+            DevClock.shared.record(pane: pane)
+        }
     }
 
     /// Adds the script to a web pane's configuration. The handler only knows the pane's id,
