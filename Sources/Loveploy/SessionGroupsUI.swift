@@ -112,7 +112,7 @@ enum Accounts {
         profile(account)?.name ?? "Cuenta por defecto"
     }
 
-    static func tint(_ account: String?) -> Color {
+    static func tint(_ account: String?) -> SwiftUI.Color {
         profile(account)?.tint ?? .secondary
     }
 
