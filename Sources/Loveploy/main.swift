@@ -4373,6 +4373,8 @@ struct MenuView: View {
     @State private var editing: UUID?
 
     var body: some View {
+        // Loveploy: the panel can be taller than the screen; it scrolls instead of running off it.
+        ScrollView(.vertical) {
         VStack(alignment: .leading, spacing: 0) {
             // The switch reads "any profile running": on opens every profile, off quits them all.
             HStack {
@@ -4467,12 +4469,15 @@ struct MenuView: View {
             .padding(.vertical, 5)
         }
         .frame(width: 300)
-        .onChange(of: panel.closed) { editing = nil }
-        .onExitCommand { PanelController.shared.close() }
         .fixedSize(horizontal: false, vertical: true)
         .onGeometryChange(for: CGSize.self, of: { $0.size }) { size in
             DispatchQueue.main.async { PanelController.shared.resize(to: size) }
         }
+        }
+        .scrollIndicators(.automatic)
+        .frame(width: 300)
+        .onChange(of: panel.closed) { editing = nil }
+        .onExitCommand { PanelController.shared.close() }
         .frame(maxHeight: .infinity, alignment: .top)
     }
 }
@@ -4493,6 +4498,7 @@ final class PanelController: ObservableObject {
     private var localMonitor: Any?   // Loveploy
     private var activation: NSObjectProtocol?   // Loveploy
     private var anchor = NSPoint.zero   // top-left corner in screen coordinates
+    private var floor: CGFloat = 0   // Loveploy: bottom of the usable screen
 
     var isOpen: Bool { panel?.isVisible ?? false }
 
@@ -4506,6 +4512,7 @@ final class PanelController: ObservableObject {
         let width: CGFloat = 300
         let x = min(max(b.minX - 12, screen.visibleFrame.minX + 6), screen.visibleFrame.maxX - width - 6)
         anchor = NSPoint(x: x, y: b.minY - 6)
+        floor = screen.visibleFrame.minY   // Loveploy
         resize(to: host?.fittingSize ?? NSSize(width: width, height: 300))
         if Engine.shared.managing { Engine.shared.discoverFolders() }
         Engine.shared.refresh()
@@ -4551,7 +4558,9 @@ final class PanelController: ObservableObject {
 
     func resize(to size: CGSize) {
         guard let panel, size.height > 0 else { return }
-        panel.setFrame(NSRect(x: anchor.x, y: anchor.y - size.height, width: size.width, height: size.height), display: true)
+        // Loveploy: never taller than the space under the menu bar; the rest scrolls.
+        let height = min(size.height, max(200, anchor.y - floor - 8))
+        panel.setFrame(NSRect(x: anchor.x, y: anchor.y - height, width: size.width, height: height), display: true)
     }
 
     private func makePanel() -> KeyPanel {
