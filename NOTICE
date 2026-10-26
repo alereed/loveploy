@@ -1,5 +1,6 @@
 Loveploy
-Copyright 2026 alereed
+Hecho por Blender.mx · Alejandro Reed
+Copyright 2026 Alejandro Reed, Blender.mx (https://blender.mx)
 
 Loveploy incluye MultiClaude 1.6.1 de Soma Labs (https://github.com/QuentinCar0n/multiclaude),
 publicado bajo la Apache License 2.0 (ver LICENSE-MultiClaude). Sources/Loveploy/main.swift es

@@ -1,5 +1,7 @@
 # Loveploy
 
+**Hecho por [Blender.mx](https://blender.mx) · Alejandro Reed.**
+
 App de barra de menú para Mac que junta tres cosas:
 
 1. **Tus cuentas de Claude, abiertas a la vez.** Es [MultiClaude](https://github.com/QuentinCar0n/multiclaude) de Soma Labs, incluido completo: un perfil por cuenta, colores, una app por perfil, Claude Code por cuenta, uso de tokens, mantener la Mac despierta y lo demás.
@@ -160,4 +162,4 @@ scripts/build-app.sh             Arma Loveploy.app
 
 ## Licencias
 
-Loveploy se publica bajo la licencia MIT (`LICENSE`). Incluye MultiClaude de Soma Labs bajo la Apache License 2.0 (`LICENSE-MultiClaude` y `NOTICE`) y usa [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (MIT) para las terminales.
+Loveploy es de Alejandro Reed, [Blender.mx](https://blender.mx), y se publica bajo la licencia MIT (`LICENSE`). Incluye MultiClaude de Soma Labs bajo la Apache License 2.0 (`LICENSE-MultiClaude` y `NOTICE`) y usa [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (MIT) para las terminales.

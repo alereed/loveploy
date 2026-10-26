@@ -1,4 +1,4 @@
-// Loveploy: este archivo es MultiClaude 1.6.1 de Soma Labs (Apache License 2.0,
+// Loveploy (hecho por Blender.mx · Alejandro Reed): este archivo es MultiClaude 1.6.1 de Soma Labs (Apache License 2.0,
 // https://github.com/QuentinCar0n/multiclaude), modificado para Loveploy. Cambios: el panel lleva
 // el nombre de Loveploy y suma las secciones de Lovable y de grupos de sesiones (LoveployBridge),
 // no se actualiza solo desde los releases de MultiClaude, y la ventana Acerca de da el crédito.
@@ -20,8 +20,9 @@ import CoreAudio
 import Darwin
 
 let appVersion = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
-let websiteURL = URL(string: "https://somalabs.me")!
-let supportURL = URL(string: "mailto:quentin@somalabs.me?subject=MultiClaude")!
+// Loveploy: the About buttons go to Blender.mx and to MultiClaude's project.
+let websiteURL = URL(string: "https://blender.mx")!
+let supportURL = URL(string: "https://github.com/QuentinCar0n/multiclaude")!
 let claudeBundleID = "com.anthropic.claudefordesktop"
 
 // Claude.app itself. MultiClaude's per-profile copies share its bundle id, so never look it up by id alone.
@@ -4592,14 +4593,15 @@ struct AboutView: View {
                 Text("Loveploy").font(.system(size: 32, weight: .semibold))   // Loveploy
                 Text("Version \(appVersion)").font(.system(size: 13))
                 // Loveploy: credit MultiClaude, which this app is built on.
-                Text("Loveploy publica tus proyectos de Lovable y abre tus sesiones de Claude Code en grupos. Su manejo de cuentas de Claude es MultiClaude, de Soma Labs.")
+                Text("Hecho por Blender.mx · Alejandro Reed.").font(.system(size: 14, weight: .semibold)).padding(.top, 14)
+                Text("Publica tus proyectos de Lovable y abre tus sesiones de Claude Code en grupos. Su manejo de cuentas de Claude es MultiClaude, de Soma Labs.")
                     .font(.system(size: 14))
                     .lineSpacing(3)
                     .fixedSize(horizontal: false, vertical: true)
-                    .padding(.top, 14)
+                    .padding(.top, 6)
                 HStack(spacing: 18) {
-                    Button("Support") { NSWorkspace.shared.open(supportURL) }
-                    Button("Website") { NSWorkspace.shared.open(websiteURL) }
+                    Button("Blender.mx") { NSWorkspace.shared.open(websiteURL) }
+                    Button("MultiClaude") { NSWorkspace.shared.open(supportURL) }
                 }
                 .buttonStyle(PillButtonStyle())
                 .padding(.top, 18)
@@ -4611,7 +4613,7 @@ struct AboutView: View {
         .padding(.bottom, 44)
         .frame(width: 620, height: 330)
         .overlay(alignment: .bottom) {
-            Text("MultiClaude © 2026 Soma Labs, Apache 2.0. Modificado para Loveploy.")
+            Text("© 2026 Blender.mx · Alejandro Reed. Incluye MultiClaude © 2026 Soma Labs (Apache 2.0), modificado.")
                 .font(.system(size: 11)).foregroundStyle(.tertiary).padding(.bottom, 22)
         }
     }

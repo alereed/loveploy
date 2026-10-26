@@ -48,6 +48,6 @@
     <key>NSAppleEventsUsageDescription</key>
     <string>Loveploy pasa el enlace de inicio de sesión de Claude a la ventana de la cuenta que lo pidió.</string>
     <key>NSHumanReadableCopyright</key>
-    <string>Incluye MultiClaude © 2026 Soma Labs (Apache 2.0).</string>
+    <string>© 2026 Blender.mx · Alejandro Reed. Incluye MultiClaude © 2026 Soma Labs (Apache 2.0).</string>
 </dict>
 </plist>
