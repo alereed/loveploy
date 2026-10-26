@@ -58,6 +58,9 @@ public struct SessionPane: Codable, Identifiable, Hashable, Sendable {
         case local
         /// A session on claude.ai/code, in a web view.
         case cloud
+        /// A claude.ai page in one of your own Chrome windows (or an installed Chrome app),
+        /// with your Chrome sign-in, placed over the pane's spot when the group opens.
+        case chrome
     }
 
     public var id: UUID
@@ -102,12 +105,10 @@ public struct SessionPane: Codable, Identifiable, Hashable, Sendable {
     }
 
     /// A cloud pane from a pasted address. Only claude.ai pages.
-    public static func cloud(_ address: String, title: String?, account: String?) -> SessionPane? {
-        let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let url = URL(string: trimmed), url.scheme == "https",
-              let host = url.host, host == "claude.ai" || host.hasSuffix(".claude.ai") else { return nil }
-        let name = title?.trimmingCharacters(in: .whitespaces).isEmpty == false ? title! : Self.defaultTitle(for: url)
-        return SessionPane(kind: .cloud, title: name, account: account, url: url.absoluteString)
+    public static func cloud(_ address: String, title: String?, account: String?, kind: Kind = .cloud) -> SessionPane? {
+        guard let url = ClaudeLink.url(address) else { return nil }
+        let name = title.map(ClaudeLink.cleanTitle).flatMap { $0.isEmpty ? nil : $0 } ?? Self.defaultTitle(for: url)
+        return SessionPane(kind: kind == .local ? .cloud : kind, title: name, account: account, url: url.absoluteString)
     }
 
     static func defaultTitle(for url: URL) -> String {
@@ -153,6 +154,74 @@ public struct SessionPane: Codable, Identifiable, Hashable, Sendable {
         url = try? c.decodeIfPresent(String.self, forKey: .url)
         startsNew = (try? c.decodeIfPresent(Bool.self, forKey: .startsNew)) ?? false
         project = try? c.decodeIfPresent(UUID.self, forKey: .project)
+    }
+}
+
+/// claude.ai addresses: which ones panes accept, and how to tell two of them are the same page.
+public enum ClaudeLink {
+    /// An https claude.ai address, or nil.
+    public static func url(_ address: String) -> URL? {
+        let trimmed = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed), url.scheme == "https",
+              let host = url.host, host == "claude.ai" || host.hasSuffix(".claude.ai") else { return nil }
+        return url
+    }
+
+    /// A Claude Code session (claude.ai/code/session_…).
+    public static func isCodeSession(_ address: String) -> Bool {
+        url(address)?.path.contains("/code/session_") ?? false
+    }
+
+    /// Same page: same host and path, whatever the query or fragment.
+    public static func samePage(_ a: String, _ b: String) -> Bool {
+        guard let x = url(a), let y = url(b) else { return false }
+        let trim: (String) -> String = { $0.hasSuffix("/") ? String($0.dropLast()) : $0 }
+        return x.host == y.host && trim(x.path) == trim(y.path)
+    }
+
+    /// Browser titles end in " - Claude" or " | Claude".
+    public static func cleanTitle(_ title: String) -> String {
+        var text = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        for suffix in [" - Claude", " | Claude", " – Claude", " — Claude"] where text.hasSuffix(suffix) {
+            text = String(text.dropLast(suffix.count))
+        }
+        return text == "Claude" ? "" : text
+    }
+}
+
+/// A tab of Google Chrome, as Loveploy's AppleScript lists them: one line per tab,
+/// "windowID<TAB>tabIndex<TAB>url<TAB>title".
+public struct ChromeTab: Hashable, Sendable, Identifiable {
+    public let windowID: Int
+    public let tabIndex: Int
+    public let url: String
+    public let title: String
+    public var id: String { "\(windowID)-\(tabIndex)" }
+
+    public init(windowID: Int, tabIndex: Int, url: String, title: String) {
+        self.windowID = windowID
+        self.tabIndex = tabIndex
+        self.url = url
+        self.title = title
+    }
+
+    public static func parse(_ output: String) -> [ChromeTab] {
+        output.split(whereSeparator: \.isNewline).compactMap { line in
+            let parts = line.split(separator: "\t", maxSplits: 3, omittingEmptySubsequences: false).map(String.init)
+            guard parts.count >= 3, let window = Int(parts[0]), let tab = Int(parts[1]) else { return nil }
+            return ChromeTab(windowID: window, tabIndex: tab, url: parts[2], title: parts.count > 3 ? parts[3] : "")
+        }
+    }
+
+    /// Tabs on claude.ai, Claude Code sessions first, one per page.
+    public static func claudeTabs(_ tabs: [ChromeTab]) -> [ChromeTab] {
+        var seen: [String] = []
+        let found = tabs.filter { tab in
+            guard ClaudeLink.url(tab.url) != nil, !seen.contains(where: { ClaudeLink.samePage($0, tab.url) }) else { return false }
+            seen.append(tab.url)
+            return true
+        }
+        return found.filter { ClaudeLink.isCodeSession($0.url) } + found.filter { !ClaudeLink.isCodeSession($0.url) }
     }
 }
 

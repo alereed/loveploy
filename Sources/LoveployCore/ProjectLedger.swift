@@ -102,7 +102,7 @@ public struct UsageLedger: Codable, Equatable, Sendable {
     /// Session id → activity.
     public var sessions: [String: SessionActivity] = [:]
     /// Replies already counted (a reply copied into two transcripts counts once).
-    var seen: Set<String> = []
+    var seen: Set<UInt64> = []
 
     public init() {}
 
@@ -145,7 +145,8 @@ public struct UsageLedger: Codable, Equatable, Sendable {
             carry.append(chunk)
             var start = carry.startIndex
             while let newline = carry[start...].firstIndex(of: 0x0A) {
-                ingest(carry[start..<newline], session: session, subagent: subagent, calendar: calendar)
+                let line = carry[start..<newline]
+                drainPool { ingest(line, session: session, subagent: subagent, calendar: calendar) }
                 position += UInt64(newline - start + 1)
                 start = carry.index(after: newline)
             }
@@ -155,26 +156,33 @@ public struct UsageLedger: Codable, Equatable, Sendable {
     }
 
     /// A subagent's folder never names the session's folder (files are read in any order).
+    ///
+    /// Transcript lines can be megabytes (tool results, file contents), so a line is never
+    /// parsed whole: only the handful of fields needed are picked out of the bytes, and only
+    /// the small `usage` object goes through the JSON parser. This keeps memory flat however
+    /// much history there is.
     mutating func ingest(_ line: Data, session: String, subagent: Bool = false, calendar: Calendar) {
-        guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-              let type = object["type"] as? String, type == "user" || type == "assistant",
-              let stamp = (object["timestamp"] as? String).flatMap(parseISO8601) else { return }
+        guard JSONBytes.contains(line, #""type":"user""#) || JSONBytes.contains(line, #""type":"assistant""#),
+              let stamp = JSONBytes.string(line, key: "timestamp").flatMap(parseISO8601) else { return }
         var activity = sessions[session] ?? SessionActivity()
-        if !subagent, !activity.cwdFromSession, let cwd = object["cwd"] as? String, !cwd.isEmpty {
-            activity.cwd = cwd
-            activity.cwdFromSession = true
-        } else if activity.cwd == nil, let cwd = object["cwd"] as? String, !cwd.isEmpty {
-            activity.cwd = cwd
+        if let cwd = JSONBytes.string(line, key: "cwd"), !cwd.isEmpty {
+            if !subagent, !activity.cwdFromSession {
+                activity.cwd = cwd
+                activity.cwdFromSession = true
+            } else if activity.cwd == nil {
+                activity.cwd = cwd
+            }
         }
         let day = DevHours.dayKey(stamp, calendar: calendar)
         let parts = calendar.dateComponents([.hour, .minute], from: stamp)
         var today = activity.days[day] ?? DayActivity()
         today.slots.insert(((parts.hour ?? 0) * 60 + (parts.minute ?? 0)) / DevHours.slotMinutes)
 
-        if let message = object["message"] as? [String: Any], let usage = message["usage"] as? [String: Any],
-           let model = message["model"] as? String, model != "<synthetic>" {
-            let key = (message["id"] as? String ?? "") + "|" + (object["requestId"] as? String ?? "")
-            if key == "|" || seen.insert(key).inserted {
+        if let usageData = JSONBytes.object(line, key: "usage"),
+           let usage = try? JSONSerialization.jsonObject(with: usageData) as? [String: Any],
+           let model = JSONBytes.string(line, key: "model"), model != "<synthetic>" {
+            let key = (JSONBytes.string(line, key: "id", prefix: "msg_") ?? "") + "|" + (JSONBytes.string(line, key: "requestId") ?? "")
+            if key == "|" || seen.insert(Self.hash(key)).inserted {
                 let count = TokenCount(
                     input: usage["input_tokens"] as? Int ?? 0,
                     output: usage["output_tokens"] as? Int ?? 0,
@@ -187,6 +195,13 @@ public struct UsageLedger: Codable, Equatable, Sendable {
         }
         activity.days[day] = today
         sessions[session] = activity
+    }
+
+    /// FNV-1a: 8 bytes per counted reply instead of the whole id.
+    static func hash(_ text: String) -> UInt64 {
+        var h: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in text.utf8 { h = (h ^ UInt64(byte)) &* 0x100_0000_01b3 }
+        return h
     }
 
     // MARK: Totals
@@ -349,4 +364,69 @@ public struct JSONFile<Value: Codable>: Sendable {
         try JSONEncoder().encode(value).write(to: fileURL, options: .atomic)
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
     }
+}
+
+/// Picks fields out of a JSON line without parsing it.
+enum JSONBytes {
+    static func contains(_ line: Data, _ text: String) -> Bool {
+        line.range(of: Data(text.utf8)) != nil
+    }
+
+    /// The first `"key":"value"` string (optionally only values starting with `prefix`).
+    static func string(_ line: Data, key: String, prefix: String = "") -> String? {
+        let marker = Data(("\"" + key + "\":\"" + prefix).utf8)
+        guard let found = line.range(of: marker) else { return nil }
+        let start = found.upperBound - prefix.utf8.count
+        var index = start
+        var escaped = false
+        while index < line.endIndex {
+            let byte = line[index]
+            if escaped {
+                escaped = false
+            } else if byte == 0x5C {
+                escaped = true
+            } else if byte == 0x22 {
+                guard let text = String(data: line[start..<index], encoding: .utf8) else { return nil }
+                return text.contains("\\") ? (try? JSONSerialization.jsonObject(with: Data(("\"" + text + "\"").utf8), options: .fragmentsAllowed)) as? String : text
+            }
+            index += 1
+        }
+        return nil
+    }
+
+    /// The bytes of the first `"key":{...}` object.
+    static func object(_ line: Data, key: String) -> Data? {
+        guard let found = line.range(of: Data(("\"" + key + "\":{").utf8)) else { return nil }
+        let start = found.upperBound - 1
+        var depth = 0
+        var inString = false
+        var escaped = false
+        var index = start
+        while index < line.endIndex {
+            let byte = line[index]
+            if inString {
+                if escaped { escaped = false } else if byte == 0x5C { escaped = true } else if byte == 0x22 { inString = false }
+            } else if byte == 0x22 {
+                inString = true
+            } else if byte == 0x7B {
+                depth += 1
+            } else if byte == 0x7D {
+                depth -= 1
+                if depth == 0 { return Data(line[start...index]) }
+            }
+            index += 1
+        }
+        return nil
+    }
+}
+
+/// Frees each line's temporary objects right away on macOS (Foundation hands many out
+/// autoreleased, and a background scan has no run loop draining them).
+@inline(__always)
+func drainPool<T>(_ body: () -> T) -> T {
+    #if canImport(ObjectiveC)
+    return autoreleasepool(invoking: body)
+    #else
+    return body()
+    #endif
 }

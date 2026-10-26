@@ -13,6 +13,7 @@ App de barra de menú para Mac que junta tres cosas:
 Un grupo es un escenario de trabajo: hasta **8 sesiones de Claude Code** que se abren juntas en **una ventana dividida**, como en Claude desktop, acomodadas como tú decidas.
 
 - **Sesiones de esta Mac**: Loveploy lista las sesiones de Claude Code de cada cuenta (las de la terminal y las del Code tab de la app, y las de cualquier carpeta `~/.claude*`) con su título, carpeta y cuenta. Puedes buscarlas, filtrarlas por cuenta, verlas agrupadas por carpeta y marcar varias para agregarlas de una vez. Cada panel es una terminal que reanuda la sesión con `claude --resume` en su carpeta, con la cuenta correcta (`CLAUDE_CONFIG_DIR` del perfil). También puedes empezar una sesión nueva en la carpeta que elijas.
+- **Desde tu Chrome**: la pestaña **En Chrome** lista lo que tienes abierto de claude.ai en Chrome (pestañas y apps instaladas de Chrome) y, si tienes abierto claude.ai/code, todas las sesiones que lista su barra lateral. Un clic las agrega como **Ventana de Chrome** (tu propio Chrome, con tu sesión: Loveploy acomoda esa ventana encima de su panel y la sigue cuando mueves el grupo) o **Dentro de Loveploy**. La pestaña **En la nube** lee las sesiones de claude.ai/code de cada cuenta. macOS pide una vez permiso para controlar Chrome.
 - **Sesiones de la nube**: pega la dirección de una sesión de claude.ai/code (o crea una nueva) y elige la cuenta. Cada cuenta guarda su propio inicio de sesión de claude.ai, así que en un mismo grupo puedes mezclar cuentas.
 - **Acomodo**: cuadrícula, columnas, filas o uno grande y el resto a un lado. Los divisores se arrastran, y cada panel se puede mover antes o después, reiniciar, abrir en Terminal o en el navegador, o quitar.
 - **Varias ventanas**: cada grupo tiene su propia ventana y recuerda en qué pantalla estaba, en qué posición y de qué tamaño. Puedes tener varias abiertas a la vez, una por escenario.
@@ -27,6 +28,16 @@ Mientras hay una ventana de grupo abierta, Loveploy aparece en el Dock y en ⌘-
 
 - **Cuánto queda de la semana**: con **Mostrar cuánto queda de la semana** (lee los límites de claude.ai de cada cuenta), el panel muestra una barra por cuenta con el porcentaje que te queda del límite semanal, cuándo se renueva y el límite de 5 horas. La barra de menú muestra una pila pequeña con lo que queda de la cuenta más cerca del límite (en rojo con 15 % o menos). Se puede quitar con **Semana en la barra de menú**.
 - **Horas de desarrollo**: hoy, esta semana y los últimos 30 días. Cuenta cada bloque de 5 minutos en que tú o Claude Code escribieron en una sesión de esta Mac (terminal, Code tab y Cowork), leyendo las transcripciones de Claude Code. Se guardan en `~/Library/Application Support/Loveploy/dev-hours.json`.
+
+## 🧭 Panel corto y ventana de Loveploy
+
+El panel de la barra de menú muestra solo lo de todos los días: tus grupos (un clic los abre), Lovable en una línea con **Publicar**, lo que queda de la semana, las horas de hoy y tus perfiles. Si no cabe en la pantalla, se desplaza. Todo lo demás está en la **ventana de Loveploy** (clic en «Loveploy» arriba del panel o en **Abrir Loveploy…**): panel completo con ajustes, grupos (nombre, tecla rápida, proyecto, abrir al iniciar), Lovable, proyectos y cobro, y consumo detallado. **Panel corto** se puede apagar para ver todo en el panel como antes.
+
+## 🪶 Memoria
+
+- Las horas y tokens se leen de las transcripciones sin cargar cada línea completa (pueden pesar megas), así que la memoria no crece con el historial.
+- Cada panel web dentro de Loveploy es un proceso de WebKit; al minimizar la ventana del grupo se liberan y vuelven al mostrarla. Las **ventanas de Chrome** no gastan memoria extra en Loveploy.
+- Cada sesión local es un proceso de Claude Code: ocho sesiones abiertas son ocho procesos.
 
 ## 💼 Proyectos y cobro
 

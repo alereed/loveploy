@@ -95,6 +95,7 @@ final class SessionGroups: ObservableObject {
             NSApp.activate()
             if window.isMiniaturized { window.deminiaturize(nil) }
             window.makeKeyAndOrderFront(nil)
+            controller.followChrome()
             return
         }
         guard group(id) != nil else { return }
@@ -104,6 +105,7 @@ final class SessionGroups: ObservableObject {
         updateActivationPolicy()
         NSApp.activate()
         controller.showWindow(nil)
+        controller.followChrome()
     }
 
     func openAll() { groups.forEach { open($0.id) } }
@@ -128,6 +130,14 @@ final class SessionGroups: ObservableObject {
         } catch {
             NSSound.beep()
         }
+    }
+}
+
+extension NSAlert {
+    static func show(_ message: String) {
+        let alert = NSAlert()
+        alert.messageText = message
+        alert.runModal()
     }
 }
 
@@ -226,6 +236,26 @@ final class GroupWindowController: NSWindowController, NSWindowDelegate {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
+    // Chrome panes follow the window when it moves or changes size.
+    private var follow: DispatchWorkItem?
+
+    func windowDidMove(_ notification: Notification) { followChrome() }
+    func windowDidEndLiveResize(_ notification: Notification) { followChrome() }
+    func windowDidMiniaturize(_ notification: Notification) { hosts.suspendWeb() }
+    func windowDidDeminiaturize(_ notification: Notification) {
+        hosts.resume()
+        followChrome()
+    }
+
+    func followChrome() {
+        guard SessionGroups.shared.group(groupID)?.panes.contains(where: { $0.kind == .chrome }) == true else { return }
+        follow?.cancel()
+        let id = groupID
+        let item = DispatchWorkItem { Task { @MainActor in await ChromePlacer.shared.arrange(id) } }
+        follow = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: item)
+    }
+
     func windowWillClose(_ notification: Notification) {
         hosts.terminateAll()
         SessionGroups.shared.windowClosed(groupID)
@@ -270,7 +300,20 @@ final class PaneHosts: ObservableObject {
 
     func terminateAll() {
         for id in Array(views.keys) { drop(id) }
+        popups = []
     }
+
+    /// Each web pane is a WebKit process of its own (hundreds of MB). While the window is
+    /// minimized they're let go, and come back when it's shown again; terminals keep running.
+    func suspendWeb() {
+        for (id, view) in views where view is WKWebView {
+            view.removeFromSuperview()
+            views[id] = nil
+        }
+        popups = []
+    }
+
+    func resume() { objectWillChange.send() }
 
     // A terminal running Claude Code through the user's login shell, signed in as the pane's account.
     private func makeTerminal(_ pane: SessionPane) -> NSView {
@@ -525,6 +568,13 @@ struct GroupView: View {
             Toggle("Abrir al iniciar", isOn: Binding(get: { group.openAtLaunch }, set: { on in groups.change(groupID) { $0.openAtLaunch = on } }))
                 .toggleStyle(.checkbox)
                 .font(.system(size: 12))
+            if group.panes.contains(where: { $0.kind == .chrome }) {
+                Button {
+                    Task { if let error = await ChromePlacer.shared.arrange(groupID) { NSAlert.show(error) } }
+                } label: { Label("Acomodar Chrome", systemImage: "macwindow.on.rectangle") }
+                .font(.system(size: 12))
+                .help("Pone tus ventanas de Chrome sobre sus paneles y las trae al frente")
+            }
             ShortcutRecorder(current: group.shortcut) { groups.setShortcut($0, for: groupID) }
                 .font(.system(size: 12))
             ProjectMenu(selected: group.project, suggestedName: group.name) { project in
@@ -613,7 +663,11 @@ struct PaneCell: View {
         VStack(spacing: 0) {
             header
             ZStack {
-                PaneHostView(pane: pane, hosts: hosts)
+                if pane.kind == .chrome {
+                    ChromePaneView(pane: pane, groupID: groupID)
+                } else {
+                    PaneHostView(pane: pane, hosts: hosts)
+                }
                 if let message = hosts.ended[pane.id] {
                     VStack(spacing: 8) {
                         Text(message).font(.system(size: 13, weight: .medium))
@@ -630,14 +684,14 @@ struct PaneCell: View {
     private var header: some View {
         HStack(spacing: 6) {
             Circle().fill(Accounts.tint(pane.account)).frame(width: 8, height: 8)
-            Image(systemName: pane.kind == .local ? "terminal" : "globe")
+            Image(systemName: pane.kind == .local ? "terminal" : pane.kind == .chrome ? "macwindow" : "globe")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             Text(pane.title).font(.system(size: 12, weight: .medium)).lineLimit(1)
             Text(Accounts.name(pane.account)).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
             Spacer(minLength: 4)
             ProjectMenu(selected: pane.project, inherited: SessionGroups.shared.group(groupID)?.project, isPane: true,
-                        cloud: pane.kind == .cloud, suggestedName: pane.title, folder: pane.directory) { project in
+                        cloud: pane.kind != .local, suggestedName: pane.title, folder: pane.directory) { project in
                 var changed = pane
                 changed.project = project
                 SessionGroups.shared.change(groupID) { $0.replace(changed) }
@@ -648,8 +702,10 @@ struct PaneCell: View {
             Button { SessionGroups.shared.change(groupID) { $0.move(pane.id, by: 1) } } label: { Image(systemName: "chevron.right") }
                 .disabled(index >= count - 1)
                 .help("Mover después")
-            Button { hosts.reload(pane) } label: { Image(systemName: "arrow.clockwise") }
-                .help(pane.kind == .local ? "Reiniciar la sesión" : "Recargar")
+            Button {
+                if pane.kind == .chrome { Task { await ChromePlacer.shared.arrange(groupID) } } else { hosts.reload(pane) }
+            } label: { Image(systemName: "arrow.clockwise") }
+                .help(pane.kind == .local ? "Reiniciar la sesión" : pane.kind == .chrome ? "Acomodar Chrome" : "Recargar")
             Button { openOutside() } label: { Image(systemName: "arrow.up.forward.app") }
                 .help(pane.kind == .local ? "Abrir en Terminal" : "Abrir en el navegador")
             Button {
@@ -669,6 +725,11 @@ struct PaneCell: View {
         switch pane.kind {
         case .cloud:
             if let url = pane.url.flatMap(URL.init(string:)) { NSWorkspace.shared.open(url) }
+        case .chrome:
+            if let url = pane.url.flatMap(URL.init(string:)),
+               let chrome = NSWorkspace.shared.urlForApplication(withBundleIdentifier: ChromeBridge.bundleID) {
+                NSWorkspace.shared.open([url], withApplicationAt: chrome, configuration: NSWorkspace.OpenConfiguration())
+            }
         case .local:
             var lines = ["#!/bin/zsh"]
             for (key, value) in pane.environment { lines.append("export \(key)=\(shellQuote(value))") }
@@ -686,6 +747,215 @@ struct PaneCell: View {
 }
 
 // MARK: - Adding sessions
+
+/// The claude.ai pages open in Chrome (tabs and installed apps), one click to add.
+struct ChromeTabsList: View {
+    let groupID: UUID
+    let done: () -> Void
+    @ObservedObject private var groups = SessionGroups.shared
+    @ObservedObject private var engine = Engine.shared
+    @State private var tabs: [ChromeTab] = []
+    @State private var listed: [(url: String, title: String)] = []
+    @State private var loading = true
+    @State private var error: String?
+    @State private var listError: String?
+    @State private var account: String?
+
+    private var group: SessionGroup? { groups.group(groupID) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Lo que tienes abierto de claude.ai en Chrome, incluidas las apps instaladas de Chrome.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }.help("Volver a leer Chrome")
+            }
+            if loading {
+                ProgressView("Leyendo Chrome…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let error {
+                VStack(spacing: 8) {
+                    Text(error).multilineTextAlignment(.center).frame(maxWidth: 460)
+                    if error.contains("Automatización") {
+                        Button("Abrir Ajustes de Automatización") {
+                            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation")!)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List {
+                    Section("Abiertas en Chrome (\(tabs.count))") {
+                        if tabs.isEmpty { Text("No hay páginas de claude.ai abiertas en Chrome.").foregroundStyle(.secondary) }
+                        ForEach(tabs) { tab in row(url: tab.url, title: tab.title, open: true) }
+                    }
+                    if !listed.isEmpty || listError != nil {
+                        Section("Sesiones de Claude Code que lista Chrome (\(listed.count))") {
+                            if let listError { Text(listError).font(.caption).foregroundStyle(.secondary) }
+                            ForEach(listed.filter { item in !tabs.contains { ClaudeLink.samePage($0.url, item.url) } }, id: \.url) { item in
+                                row(url: item.url, title: item.title, open: false)
+                            }
+                        }
+                    }
+                }
+                .listStyle(.inset(alternatesRowBackgrounds: true))
+            }
+            Divider()
+            HStack {
+                Text("«Dentro de Loveploy» usa la cuenta:").font(.caption)
+                Picker("", selection: $account) {
+                    ForEach(engine.profiles) { Text($0.name).tag(Optional($0.id.uuidString)) }
+                }
+                .labelsHidden().fixedSize()
+                Spacer()
+                Button("Cerrar") { done() }.keyboardShortcut(.cancelAction)
+            }
+        }
+        .task { await load() }
+        .onAppear { account = account ?? engine.profiles.first?.id.uuidString }
+    }
+
+    private func inGroup(_ url: String) -> Bool {
+        group?.panes.contains { $0.url.map { ClaudeLink.samePage($0, url) } ?? false } ?? false
+    }
+
+    private func row(url: String, title: String, open: Bool) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: ClaudeLink.isCodeSession(url) ? "chevron.left.forwardslash.chevron.right" : "bubble.left")
+                .foregroundStyle(.secondary).frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(ClaudeLink.cleanTitle(title).isEmpty ? url : ClaudeLink.cleanTitle(title)).lineLimit(1)
+                Text(url.replacingOccurrences(of: "https://", with: "")).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+            }
+            Spacer()
+            if inGroup(url) {
+                Text("En el grupo").font(.caption).foregroundStyle(.secondary)
+            } else {
+                Button("Ventana de Chrome") { add(url, title, .chrome) }
+                    .help("Usa tu Chrome con tu sesión: Loveploy acomoda esa ventana sobre su panel")
+                Button("Dentro de Loveploy") { add(url, title, .cloud) }
+                    .help("Un panel web dentro de la ventana del grupo, con la cuenta elegida abajo")
+            }
+        }
+        .disabled(group?.isFull ?? true)
+    }
+
+    private func add(_ url: String, _ title: String, _ kind: SessionPane.Kind) {
+        guard let pane = SessionPane.cloud(url, title: title, account: account, kind: kind) else { return }
+        groups.add(pane, to: groupID)
+    }
+
+    private func load() async {
+        loading = true
+        error = nil
+        do {
+            let all = try await ChromeBridge.tabs()
+            tabs = ChromeTab.claudeTabs(all)
+            // A claude.ai/code tab lists every session in its sidebar.
+            if let codeTab = tabs.first(where: { ($0.url as NSString).contains("claude.ai/code") }) {
+                do {
+                    listed = try await ChromeBridge.listedSessions(in: codeTab)
+                    listError = nil
+                } catch {
+                    listError = error.localizedDescription
+                }
+            } else {
+                listError = "Abre claude.ai/code en Chrome para ver aquí también las sesiones que no tienes abiertas."
+            }
+        } catch {
+            self.error = error.localizedDescription
+        }
+        loading = false
+    }
+}
+
+/// The Claude Code sessions claude.ai lists for an account (read with the account's sign-in
+/// inside Loveploy).
+struct CloudSessionsList: View {
+    let groupID: UUID
+    let done: () -> Void
+    @ObservedObject private var groups = SessionGroups.shared
+    @ObservedObject private var engine = Engine.shared
+    @State private var account: String?
+    @State private var found: [(url: String, title: String)] = []
+    @State private var loading = false
+    @State private var loaded = false
+    @State private var lister: CloudSessionLister?
+
+    private var group: SessionGroup? { groups.group(groupID) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Cuenta")
+                Picker("", selection: $account) {
+                    ForEach(engine.profiles) { Text($0.name).tag(Optional($0.id.uuidString)) }
+                }
+                .labelsHidden().fixedSize()
+                Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }.help("Volver a buscar")
+                Spacer()
+            }
+            if loading {
+                ProgressView("Leyendo claude.ai/code…").frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if found.isEmpty {
+                VStack(spacing: 8) {
+                    Text(loaded ? "No encontré sesiones. Si esta cuenta no ha iniciado sesión en claude.ai dentro de Loveploy, ábrela una vez:" : "")
+                        .multilineTextAlignment(.center).frame(maxWidth: 460)
+                    if loaded {
+                        Button("Iniciar sesión en claude.ai con esta cuenta") {
+                            if let pane = SessionPane.cloud("https://claude.ai/code", title: "Claude Code", account: account) {
+                                groups.add(pane, to: groupID)
+                                done()
+                            }
+                        }
+                        Text("Si usas Claude en Chrome, la pestaña «En Chrome» lee tus sesiones desde ahí.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List(found, id: \.url) { item in
+                    HStack {
+                        Image(systemName: "chevron.left.forwardslash.chevron.right").foregroundStyle(.secondary).frame(width: 18)
+                        Text(item.title.isEmpty ? item.url : item.title).lineLimit(1)
+                        Spacer()
+                        if group?.panes.contains(where: { $0.url.map { ClaudeLink.samePage($0, item.url) } ?? false }) == true {
+                            Text("En el grupo").font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            Button("Ventana de Chrome") { add(item, .chrome) }
+                            Button("Dentro de Loveploy") { add(item, .cloud) }
+                        }
+                    }
+                    .disabled(group?.isFull ?? true)
+                }
+                .listStyle(.inset(alternatesRowBackgrounds: true))
+            }
+            Divider()
+            HStack { Spacer(); Button("Cerrar") { done() }.keyboardShortcut(.cancelAction) }
+        }
+        .onAppear {
+            if account == nil { account = engine.profiles.first?.id.uuidString }
+            Task { await load() }
+        }
+        .onChange(of: account) { Task { await load() } }
+    }
+
+    private func add(_ item: (url: String, title: String), _ kind: SessionPane.Kind) {
+        guard let pane = SessionPane.cloud(item.url, title: item.title, account: account, kind: kind) else { return }
+        groups.add(pane, to: groupID)
+    }
+
+    private func load() async {
+        guard !loading else { return }
+        loading = true
+        let lister = CloudSessionLister()
+        self.lister = lister
+        found = await lister.sessions(account: account)
+        self.lister = nil
+        loaded = true
+        loading = false
+    }
+}
 
 /// A session found on this Mac and the account it belongs to.
 struct FoundSession: Identifiable, Sendable {
@@ -728,11 +998,18 @@ struct AddPaneView: View {
             }
             Picker("", selection: $tab) {
                 Text("En esta Mac (\(sessions.count))").tag(0)
-                Text("En la nube (claude.ai/code)").tag(1)
+                Text("En Chrome").tag(2)
+                Text("En la nube").tag(3)
+                Text("Pegar dirección").tag(1)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            if tab == 0 { local } else { cloud }
+            switch tab {
+            case 2: ChromeTabsList(groupID: groupID, done: done)
+            case 3: CloudSessionsList(groupID: groupID, done: done)
+            case 1: cloud
+            default: local
+            }
         }
         .padding(16)
         .frame(minWidth: 720, idealWidth: 780, minHeight: 560, idealHeight: 640)

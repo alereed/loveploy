@@ -4371,6 +4371,15 @@ struct MenuView: View {
     @ObservedObject var usage = Usage.shared
     @AppStorage("usageOpen") private var usageOpen = true
     @State private var editing: UUID?
+    // Loveploy: the menu bar panel is short by default; everything is in the Loveploy window,
+    // which shows this same view with every section (inWindow).
+    @AppStorage("loveploy.compactPanel") private var compactPanel = true
+    let inWindow: Bool
+    private var compact: Bool { !inWindow && compactPanel }
+
+    init(inWindow: Bool = false) {
+        self.inWindow = inWindow
+    }
 
     var body: some View {
         // Loveploy: the panel can be taller than the screen; it scrolls instead of running off it.
@@ -4379,6 +4388,8 @@ struct MenuView: View {
             // The switch reads "any profile running": on opens every profile, off quits them all.
             HStack {
                 Text("Loveploy").font(.system(size: 13, weight: .bold))   // Loveploy: the app's name
+                    .onTapGesture { if !inWindow { MainWindow.show() } }
+                    .help("Abrir la ventana de Loveploy")
                 Spacer()
                 // Keep-awake on or off at a glance; durations and options are in the section below.
                 Chip(selected: awake.active, action: { awake.toggleActive() }) {
@@ -4418,10 +4429,16 @@ struct MenuView: View {
                 .padding(.bottom, 8)
             }
 
+            if compact {
+                CompactSections()
+            }
+
+            if !compact {
             Divider().padding(.horizontal, 14)
             SectionHeader(title: "Keep Awake (\(awake.durationLabel))", trailing: awake.remainingText, open: $awakeOpen)
             if awakeOpen {
                 AwakeSection().padding(.horizontal, 6).padding(.bottom, 5)
+            }
             }
 
             if engine.managing {
@@ -4437,7 +4454,7 @@ struct MenuView: View {
                     .padding(.horizontal, 6)
                     .padding(.bottom, 5)
                 }
-                if engine.isOn(.trackUsage) || engine.isOn(.chatLimits) {
+                if !compact && (engine.isOn(.trackUsage) || engine.isOn(.chatLimits)) {
                     Divider().padding(.horizontal, 14)
                     SectionHeader(title: "Usage Today",
                                   trailing: Usage.short(UsageMetric.current.value(usage.totals(days: 1).values.reduce(UsageTotals(), +))) + " " + UsageMetric.current.unit,
@@ -4447,11 +4464,13 @@ struct MenuView: View {
             }
 
             // Loveploy: Lovable deploys and saved session groups.
-            LoveploySections()
+            if !compact { LoveploySections() }
 
+            if !compact {
             Divider().padding(.horizontal, 14)
             SectionHeader(title: "Settings", open: $settingsOpen)
-            if settingsOpen {
+            }
+            if settingsOpen && !compact {
                 VStack(spacing: 0) {
                     // Loveploy: no "Update MultiClaude Automatically" (see Engine.boot).
                     ForEach(Setting.allCases.filter { $0 != .autoUpdate && (engine.managing || !Setting.claudeOnly.contains($0)) }) { SettingRow(setting: $0) }
@@ -4462,6 +4481,13 @@ struct MenuView: View {
 
             Divider().padding(.horizontal, 14)
             VStack(spacing: 0) {
+                if !inWindow {
+                    PlainRow(title: compact ? "Abrir Loveploy…" : "Abrir la ventana de Loveploy…") { MainWindow.show() }
+                }
+                Toggle("Panel corto", isOn: $compactPanel)
+                    .toggleStyle(.checkbox).font(.system(size: 12)).padding(.horizontal, 8).padding(.vertical, 3)
+                    .help("Solo lo de uso diario aquí; todo lo demás en la ventana de Loveploy")
+                    .opacity(inWindow ? 1 : 0.7)
                 PlainRow(title: "About") { PanelController.shared.close(); AboutWindow.show() }
                 PlainRow(title: "Quit") { NSApp.terminate(nil) }
             }
@@ -4471,7 +4497,7 @@ struct MenuView: View {
         .frame(width: 300)
         .fixedSize(horizontal: false, vertical: true)
         .onGeometryChange(for: CGSize.self, of: { $0.size }) { size in
-            DispatchQueue.main.async { PanelController.shared.resize(to: size) }
+            if !inWindow { DispatchQueue.main.async { PanelController.shared.resize(to: size) } }
         }
         }
         .scrollIndicators(.automatic)

@@ -137,3 +137,27 @@ final class GroupShortcutTests: XCTestCase {
         XCTAssertEqual(store.load().first?.shortcut, first)
     }
 }
+
+final class ChromeTabTests: XCTestCase {
+    func testParsesAndPicksClaudeTabs() {
+        let output = """
+        101\t1\thttps://claude.ai/new\tClaude
+        101\t2\thttps://github.com/alereed/loveploy\tloveploy
+        102\t1\thttps://claude.ai/code/session_01AbC?x=1\tArreglar HDMI - Claude
+        103\t1\thttps://claude.ai/code/session_01AbC#bottom\tduplicada
+        104\t1\thttps://claude.ai/chat/1234\tPlan de lanzamiento | Claude
+        roto
+        """
+        let tabs = ChromeTab.parse(output)
+        XCTAssertEqual(tabs.count, 5)
+        let claude = ChromeTab.claudeTabs(tabs)
+        XCTAssertEqual(claude.map(\.windowID), [102, 101, 104], "code sessions first, one per page, no github")
+        XCTAssertTrue(ClaudeLink.samePage("https://claude.ai/code/session_01AbC/", "https://claude.ai/code/session_01AbC?y"))
+        XCTAssertFalse(ClaudeLink.samePage("https://claude.ai/code/session_01AbC", "https://claude.ai/code/session_02"))
+        let pane = SessionPane.cloud(claude[0].url, title: claude[0].title, account: nil, kind: .chrome)
+        XCTAssertEqual(pane?.kind, .chrome)
+        XCTAssertEqual(pane?.title, "Arreglar HDMI")
+        XCTAssertEqual(SessionPane.cloud(claude[1].url, title: "Claude", account: nil)?.title, "new")
+        XCTAssertNil(SessionPane.cloud("https://evil.com", title: nil, account: nil, kind: .chrome))
+    }
+}

@@ -108,3 +108,16 @@ final class ProjectLedgerTests: XCTestCase {
         XCTAssertEqual(group.project(of: pane), project)
     }
 }
+
+final class JSONBytesTests: XCTestCase {
+    func testPicksFieldsWithoutParsing() {
+        let line = Data(#"{"cwd":"/Users/ale/Mi \"app\"","type":"assistant","message":{"id":"msg_01","model":"claude-opus-5-5","content":[{"type":"tool_use","input":{"model":"otro","id":"x"}}],"usage":{"input_tokens":5,"cache_creation":{"ephemeral_5m_input_tokens":0},"output_tokens":7}},"requestId":"req_1","timestamp":"2026-10-20T10:00:00Z"}"#.utf8)
+        XCTAssertEqual(JSONBytes.string(line, key: "cwd"), #"/Users/ale/Mi "app""#)
+        XCTAssertEqual(JSONBytes.string(line, key: "model"), "claude-opus-5-5")
+        XCTAssertEqual(JSONBytes.string(line, key: "id", prefix: "msg_"), "msg_01")
+        XCTAssertEqual(JSONBytes.string(line, key: "requestId"), "req_1")
+        XCTAssertNil(JSONBytes.string(line, key: "nada"))
+        let usage = JSONBytes.object(line, key: "usage").flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+        XCTAssertEqual(usage?["output_tokens"] as? Int, 7)
+    }
+}
