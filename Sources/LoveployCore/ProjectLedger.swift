@@ -430,3 +430,34 @@ func drainPool<T>(_ body: () -> T) -> T {
     return body()
     #endif
 }
+
+/// Time in panes that leave no transcript on this Mac (claude.ai in a web pane or in your
+/// Chrome): each 5-minute slot in which the pane showed activity. Kept apart from the ledger
+/// (which a background scan rewrites) and merged into it for totals.
+public struct ActivityLog: Codable, Equatable, Sendable {
+    /// Key ("pane:<id>") → day → slots.
+    public var panes: [String: [String: Set<Int>]] = [:]
+
+    public init() {}
+
+    public static func key(pane: UUID) -> String { "pane:" + pane.uuidString }
+
+    /// Marks the slot of `date`; false when it was already marked (nothing to save).
+    @discardableResult
+    public mutating func record(_ key: String, at date: Date = Date(), calendar: Calendar = .current) -> Bool {
+        let parts = calendar.dateComponents([.hour, .minute], from: date)
+        let slot = ((parts.hour ?? 0) * 60 + (parts.minute ?? 0)) / DevHours.slotMinutes
+        return panes[key, default: [:]][DevHours.dayKey(date, calendar: calendar), default: []].insert(slot).inserted
+    }
+
+    /// The ledger plus these panes as sessions of their own (time only, no tokens).
+    public func merged(into ledger: UsageLedger) -> UsageLedger {
+        var result = ledger
+        for (key, days) in panes {
+            var activity = result.sessions[key] ?? SessionActivity()
+            for (day, slots) in days { activity.days[day, default: DayActivity()].slots.formUnion(slots) }
+            result.sessions[key] = activity
+        }
+        return result
+    }
+}

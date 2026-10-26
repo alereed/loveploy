@@ -188,9 +188,7 @@ struct MainWindowView: View {
         } detail: {
             switch state.section {
             case .home:
-                ScrollView {
-                    MenuView(inWindow: true).frame(maxWidth: .infinity)
-                }
+                MenuView(inWindow: true)
             case .groups:
                 GroupsManagerView()
             case .lovable:

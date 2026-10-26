@@ -47,7 +47,7 @@ Cada ventana de grupo, o cada sesión por separado, se puede asignar a un **proy
 - **Tokens y su valor en dinero**: por modelo, valuados a los precios de la API de Anthropic en dólares (lo que costaría ese trabajo por API; con una suscripción no se cobra por token).
 - **Honorarios**: si le pones tarifa por hora al proyecto, horas × tarifa en la moneda que elijas.
 
-También cuentan las sesiones que corren dentro de las carpetas que le agregues al proyecto. Las sesiones nuevas que abres desde un grupo reciben su identificador desde el principio, así que se miden desde el primer minuto. En **Proyectos y cobro…** (sección Consumo del panel) eliges el periodo (este mes, mes pasado, 7 días, todo) y exportas un CSV para facturar. Las sesiones de la nube no dejan registro en la Mac, así que no se pueden medir.
+Las sesiones de la nube también cuentan tiempo: un panel web suma cada bloque de 5 minutos en que escribiste, diste clic o Claude escribió algo nuevo, y una ventana de Chrome del grupo suma mientras la tienes al frente (sus tokens no se pueden leer desde la Mac). También cuentan las sesiones que corren dentro de las carpetas que le agregues al proyecto. Las sesiones nuevas que abres desde un grupo reciben su identificador desde el principio, así que se miden desde el primer minuto. En **Proyectos y cobro…** (sección Consumo del panel) eliges el periodo (este mes, mes pasado, 7 días, todo) y exportas un CSV para facturar.
 
 ## 🚀 Lovable
 

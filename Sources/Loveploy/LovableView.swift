@@ -18,13 +18,13 @@ struct LovableView: View {
                 content
             }
         }
-        .frame(width: 420)
+        .frame(minWidth: 420, maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear { model.refreshIfStale() }
     }
 
     private var header: some View {
         HStack(spacing: 8) {
-            Text("Loveploy").font(.headline)
+            Text("Lovable").font(.headline)
             if model.isRefreshing {
                 ProgressView().controlSize(.small)
             }
@@ -105,7 +105,7 @@ struct LovableView: View {
                         }
                     }
                 }
-                .frame(minHeight: 120, maxHeight: 400)
+                .frame(minHeight: 120, maxHeight: .infinity)
             }
 
             ForEach(model.errors, id: \.self) { error in

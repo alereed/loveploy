@@ -98,7 +98,7 @@ struct ProjectMenu: View {
             Button("Proyectos y cobro…") { ProjectsWindow.show() }
             if cloud {
                 Divider()
-                Text("Las sesiones de la nube no dejan registro en esta Mac: su tiempo y tokens no se pueden medir.")
+                Text("En las sesiones de la nube se mide el tiempo con actividad; sus tokens no se pueden leer desde esta Mac.")
             }
         } label: {
             Label(label, systemImage: "briefcase")
@@ -269,7 +269,7 @@ struct ProjectsView: View {
 
     private var rows: [Row] {
         let (from, to, _) = period.range()
-        return ProjectReport.build(ledger: clock.ledger, projects: projects.list, assignments: groups.billingAssignments, from: from, to: to)
+        return ProjectReport.build(ledger: clock.combined, projects: projects.list, assignments: groups.billingAssignments, from: from, to: to)
             .map { totals in Row(totals: totals, project: projects.project(totals.projectID)) }
     }
 
@@ -320,7 +320,7 @@ struct ProjectsView: View {
             if let id = selection.flatMap(UUID.init(uuidString:)), let project = projects.project(id) {
                 ProjectEditor(project: project, totals: rows.first { $0.totals.projectID == id }?.totals)
             } else {
-                Text("Asigna una ventana o una sesión a un proyecto con el botón \(Image(systemName: "briefcase")) de la ventana del grupo o de cada panel. También cuentan las sesiones que corren dentro de las carpetas del proyecto. El valor de los tokens es lo que costarían con los precios de la API de Anthropic (dólares); las sesiones de la nube no se pueden medir desde esta Mac.")
+                Text("Asigna una ventana o una sesión a un proyecto con el botón \(Image(systemName: "briefcase")) de la ventana del grupo o de cada panel. También cuentan las sesiones que corren dentro de las carpetas del proyecto. El valor de los tokens es lo que costarían con los precios de la API de Anthropic (dólares). En las sesiones de la nube (paneles web o ventanas de Chrome del grupo) se cuenta el tiempo con actividad, no sus tokens.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

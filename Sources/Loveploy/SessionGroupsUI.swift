@@ -105,7 +105,10 @@ final class SessionGroups: ObservableObject {
         var map: [String: UUID] = [:]
         for group in groups {
             for pane in group.panes {
-                if let session = pane.sessionID, let project = group.project(of: pane) { map[session] = project }
+                guard let project = group.project(of: pane) else { continue }
+                if let session = pane.sessionID { map[session] = project }
+                // Web and Chrome panes count by pane (see ActivityLog).
+                map[ActivityLog.key(pane: pane.id)] = project
             }
         }
         return map
@@ -396,6 +399,7 @@ final class PaneHosts: ObservableObject {
             configuration.websiteDataStore = .default()
         }
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
+        PaneActivity.install(in: configuration, pane: pane.id)
         let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 420), configuration: configuration)
         web.customUserAgent = LovableWeb.userAgent
         web.allowsBackForwardNavigationGestures = true

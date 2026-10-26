@@ -2,26 +2,63 @@ import AppKit
 import Combine
 import LoveployCore
 import SwiftUI
+import WebKit
 
 // Loveploy: how much of each account's weekly limit is left, in the panel and the menu bar,
 // and how many hours went into development (from Claude Code's transcripts).
 
 /// Keeps the usage ledger (time and tokens per session) up to date, reading only what the
-/// transcripts gained. Development hours and project billing both come from it.
+/// transcripts gained, plus the time spent in web and Chrome panes, which leave no transcript
+/// on this Mac. Development hours and project billing both come from it.
 @MainActor
 final class DevClock: ObservableObject {
     static let shared = DevClock()
     @Published private(set) var ledger = UsageLedger()
+    @Published private(set) var activity = ActivityLog()
     @Published private(set) var hours = DevHours()
     @Published private(set) var scanning = false
     private var timer: Timer?
+    private var chromeTimer: Timer?
     private let file = JSONFile<UsageLedger>(named: "ledger.json")
+    private let activityFile = JSONFile<ActivityLog>(named: "activity.json")
+
+    /// Transcripts and pane activity together.
+    var combined: UsageLedger { activity.merged(into: ledger) }
 
     func start() {
         guard timer == nil else { return }
+        activity = activityFile.load() ?? ActivityLog()
         timer = Timer(timeInterval: 120, repeats: true) { _ in MainActor.assumeIsolated { DevClock.shared.refresh() } }
         RunLoop.main.add(timer!, forMode: .common)
+        // While you're in a Chrome window that belongs to a group, that pane is being worked on.
+        chromeTimer = Timer(timeInterval: 60, repeats: true) { _ in MainActor.assumeIsolated { DevClock.shared.checkChrome() } }
+        RunLoop.main.add(chromeTimer!, forMode: .common)
         DispatchQueue.main.asyncAfter(deadline: .now() + 3) { DevClock.shared.refresh() }
+    }
+
+    /// A web pane wrote or was used (at most once a minute per pane).
+    func record(pane: UUID) {
+        guard activity.record(ActivityLog.key(pane: pane)) else { return }
+        try? activityFile.save(activity)
+        updateHours()
+    }
+
+    private func updateHours() {
+        let hours = combined.devHours
+        if self.hours.slots != hours.slots { self.hours = hours }
+    }
+
+    private func checkChrome() {
+        guard let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier,
+              front.hasPrefix(ChromeBridge.bundleID) else { return }
+        let panes = SessionGroups.shared.groups.flatMap(\.panes).filter { $0.kind == .chrome }
+        guard !panes.isEmpty else { return }
+        Task {
+            guard let url = try? await ChromeBridge.frontURL() else { return }
+            for pane in panes where pane.url.map({ ClaudeLink.samePage($0, url) }) == true {
+                DevClock.shared.record(pane: pane.id)
+            }
+        }
     }
 
     func refresh() {
@@ -38,14 +75,56 @@ final class DevClock: ObservableObject {
             updated.scan(roots: roots)
             if updated != before { try? file.save(updated) }
             let result = updated
-            let hours = updated.devHours
             await MainActor.run {
                 let clock = DevClock.shared
                 if clock.ledger != result { clock.ledger = result }
-                if clock.hours.slots != hours.slots { clock.hours = hours }
+                clock.updateHours()
                 clock.scanning = false
             }
         }
+    }
+}
+
+/// Injected in web panes: tells Loveploy, at most once a minute, that something happened in
+/// the pane (you typed or clicked, or Claude wrote a new piece of text).
+final class PaneActivity: NSObject, WKScriptMessageHandler {
+    static let name = "loveployActivity"
+    static let script = """
+    (function () {
+      var last = 0;
+      function ping() {
+        var now = Date.now();
+        if (now - last < 60000) return;
+        last = now;
+        try { window.webkit.messageHandlers.\(PaneActivity.name).postMessage(1); } catch (e) {}
+      }
+      ['keydown', 'mousedown', 'wheel'].forEach(function (t) { addEventListener(t, ping, true); });
+      new MutationObserver(function (records) {
+        for (var i = 0; i < records.length; i++) {
+          var nodes = records[i].addedNodes;
+          for (var j = 0; j < nodes.length; j++) {
+            if ((nodes[j].textContent || '').length >= 30) { ping(); return; }
+          }
+          if (records[i].type === 'characterData' && (records[i].target.data || '').length >= 30) { ping(); return; }
+        }
+      }).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+    })();
+    """
+    let pane: UUID
+
+    init(pane: UUID) { self.pane = pane }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        let pane = pane
+        MainActor.assumeIsolated { DevClock.shared.record(pane: pane) }
+    }
+
+    /// Adds the script to a web pane's configuration. The handler only knows the pane's id,
+    /// so it holds nothing alive when the pane goes away.
+    static func install(in configuration: WKWebViewConfiguration, pane: UUID) {
+        let controller = configuration.userContentController
+        controller.add(PaneActivity(pane: pane), name: name)
+        controller.addUserScript(WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
     }
 }
 

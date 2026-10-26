@@ -4494,14 +4494,16 @@ struct MenuView: View {
             .padding(.horizontal, 6)
             .padding(.vertical, 5)
         }
-        .frame(width: 300)
+        .frame(width: inWindow ? nil : 300)   // Loveploy: in the window it takes the window's width
+        .frame(maxWidth: inWindow ? 820 : nil)
+        .padding(.horizontal, inWindow ? 24 : 0)
         .fixedSize(horizontal: false, vertical: true)
         .onGeometryChange(for: CGSize.self, of: { $0.size }) { size in
             if !inWindow { DispatchQueue.main.async { PanelController.shared.resize(to: size) } }
         }
         }
         .scrollIndicators(.automatic)
-        .frame(width: 300)
+        .frame(width: inWindow ? nil : 300)
         .onChange(of: panel.closed) { editing = nil }
         .onExitCommand { PanelController.shared.close() }
         .frame(maxHeight: .infinity, alignment: .top)

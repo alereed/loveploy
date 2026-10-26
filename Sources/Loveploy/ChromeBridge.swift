@@ -79,6 +79,13 @@ enum ChromeBridge {
         return ChromeTab.parse(try await run(script))
     }
 
+    /// The address in the front Chrome window.
+    static func frontURL() async throws -> String {
+        guard isRunning else { throw ChromeError.notRunning }
+        return try await run("tell application id \"\(bundleID)\" to return URL of active tab of front window")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     /// Claude Code sessions listed on a claude.ai/code tab, read from the page (needs Chrome's
     /// "Allow JavaScript from Apple Events").
     static func listedSessions(in tab: ChromeTab) async throws -> [(url: String, title: String)] {

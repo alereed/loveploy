@@ -121,3 +121,20 @@ final class JSONBytesTests: XCTestCase {
         XCTAssertEqual(usage?["output_tokens"] as? Int, 7)
     }
 }
+
+final class ActivityLogTests: XCTestCase {
+    func testWebPanesCountTowardTheirProject() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "UTC")!
+        let pane = UUID(), project = BillingProject(name: "AOC")
+        var log = ActivityLog()
+        XCTAssertTrue(log.record(ActivityLog.key(pane: pane), at: parseISO8601("2026-10-26T15:01:00Z")!, calendar: calendar))
+        XCTAssertFalse(log.record(ActivityLog.key(pane: pane), at: parseISO8601("2026-10-26T15:04:00Z")!, calendar: calendar), "same slot")
+        log.record(ActivityLog.key(pane: pane), at: parseISO8601("2026-10-26T15:20:00Z")!, calendar: calendar)
+        let merged = log.merged(into: UsageLedger())
+        XCTAssertEqual(merged.devHours.minutes(on: parseISO8601("2026-10-26T12:00:00Z")!, calendar: calendar), 10)
+        let report = ProjectReport.build(ledger: merged, projects: [project], assignments: [ActivityLog.key(pane: pane): project.id])
+        XCTAssertEqual(report.first?.minutes, 10)
+        XCTAssertEqual(report.first?.sessions, 1)
+    }
+}
