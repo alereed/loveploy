@@ -38,9 +38,19 @@ final class SessionGroups: ObservableObject {
 
     func change(_ id: UUID, _ edit: (inout SessionGroup) -> Void) {
         guard let index = groups.firstIndex(where: { $0.id == id }) else { return }
+        let before = (groups[index].layout, groups[index].panes.map(\.id))
         edit(&groups[index])
         save()
         windows[id]?.window?.title = groups[index].name
+        // A new arrangement starts evenly split.
+        if before.0 != groups[index].layout || before.1 != groups[index].panes.map(\.id) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.equalize(id) }
+        }
+    }
+
+    /// Every pane of the group's window the same width (and the same height in each column).
+    func equalize(_ id: UUID) {
+        windows[id]?.equalize()
     }
 
     /// Adds a pane; false when the group already has eight.
@@ -105,7 +115,7 @@ final class SessionGroups: ObservableObject {
         updateActivationPolicy()
         NSApp.activate()
         controller.showWindow(nil)
-        controller.followChrome()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { controller.equalize() }
     }
 
     func openAll() { groups.forEach { open($0.id) } }
@@ -234,6 +244,28 @@ final class GroupWindowController: NSWindowController, NSWindowDelegate {
         alert.addButton(withTitle: "Cerrar")
         alert.addButton(withTitle: "Cancelar")
         return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// Splits every row and column of the window evenly, outermost first.
+    func equalize() {
+        guard let root = window?.contentView else { return }
+        Self.equalize(root)
+        followChrome()
+    }
+
+    private static func equalize(_ view: NSView) {
+        if let split = view as? NSSplitView {
+            let panes = split.arrangedSubviews.filter { !$0.isHidden }
+            if panes.count > 1 {
+                let total = split.isVertical ? split.bounds.width : split.bounds.height
+                let size = (total - CGFloat(panes.count - 1) * split.dividerThickness) / CGFloat(panes.count)
+                for index in 0..<(panes.count - 1) {
+                    split.setPosition(CGFloat(index + 1) * size + CGFloat(index) * split.dividerThickness, ofDividerAt: index)
+                }
+                split.layoutSubtreeIfNeeded()
+            }
+        }
+        for child in view.subviews { equalize(child) }
     }
 
     // Chrome panes follow the window when it moves or changes size.
@@ -568,6 +600,13 @@ struct GroupView: View {
             Toggle("Abrir al iniciar", isOn: Binding(get: { group.openAtLaunch }, set: { on in groups.change(groupID) { $0.openAtLaunch = on } }))
                 .toggleStyle(.checkbox)
                 .font(.system(size: 12))
+            Button {
+                groups.equalize(groupID)
+            } label: { Label("Igualar", systemImage: "equal.square") }
+            .font(.system(size: 12))
+            .keyboardShortcut("=", modifiers: [.command, .option])
+            .help("Todos los paneles del mismo ancho y alto (⌥⌘=)")
+            .disabled(group.panes.count < 2)
             if group.panes.contains(where: { $0.kind == .chrome }) {
                 Button {
                     Task { if let error = await ChromePlacer.shared.arrange(groupID) { NSAlert.show(error) } }
