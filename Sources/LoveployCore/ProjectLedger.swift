@@ -85,6 +85,8 @@ public struct DayActivity: Codable, Equatable, Sendable {
 public struct SessionActivity: Codable, Equatable, Sendable {
     /// The folder the session ran in.
     public var cwd: String?
+    /// `cwd` came from the session's own transcript, not one of its subagents'.
+    var cwdFromSession = false
     /// "yyyy-MM-dd" → activity.
     public var days: [String: DayActivity] = [:]
 
@@ -118,7 +120,8 @@ public struct UsageLedger: Codable, Equatable, Sendable {
                 var offset = offsets[path] ?? 0
                 if size < offset { offset = 0 }
                 guard size > offset else { continue }
-                offsets[path] = read(file, from: offset, session: Self.sessionID(of: file), calendar: calendar)
+                let subagent = file.deletingLastPathComponent().lastPathComponent == "subagents"
+                offsets[path] = read(file, from: offset, session: Self.sessionID(of: file), subagent: subagent, calendar: calendar)
             }
         }
         // Claude Code deletes old transcripts; what they held stays, their offsets go.
@@ -132,7 +135,7 @@ public struct UsageLedger: Codable, Equatable, Sendable {
         return file.deletingPathExtension().lastPathComponent
     }
 
-    private mutating func read(_ file: URL, from offset: UInt64, session: String, calendar: Calendar) -> UInt64 {
+    private mutating func read(_ file: URL, from offset: UInt64, session: String, subagent: Bool, calendar: Calendar) -> UInt64 {
         guard let handle = try? FileHandle(forReadingFrom: file) else { return offset }
         defer { try? handle.close() }
         try? handle.seek(toOffset: offset)
@@ -142,7 +145,7 @@ public struct UsageLedger: Codable, Equatable, Sendable {
             carry.append(chunk)
             var start = carry.startIndex
             while let newline = carry[start...].firstIndex(of: 0x0A) {
-                ingest(carry[start..<newline], session: session, calendar: calendar)
+                ingest(carry[start..<newline], session: session, subagent: subagent, calendar: calendar)
                 position += UInt64(newline - start + 1)
                 start = carry.index(after: newline)
             }
@@ -151,12 +154,18 @@ public struct UsageLedger: Codable, Equatable, Sendable {
         return position
     }
 
-    mutating func ingest(_ line: Data, session: String, calendar: Calendar) {
+    /// A subagent's folder never names the session's folder (files are read in any order).
+    mutating func ingest(_ line: Data, session: String, subagent: Bool = false, calendar: Calendar) {
         guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
               let type = object["type"] as? String, type == "user" || type == "assistant",
               let stamp = (object["timestamp"] as? String).flatMap(parseISO8601) else { return }
         var activity = sessions[session] ?? SessionActivity()
-        if activity.cwd == nil, let cwd = object["cwd"] as? String, !cwd.isEmpty { activity.cwd = cwd }
+        if !subagent, !activity.cwdFromSession, let cwd = object["cwd"] as? String, !cwd.isEmpty {
+            activity.cwd = cwd
+            activity.cwdFromSession = true
+        } else if activity.cwd == nil, let cwd = object["cwd"] as? String, !cwd.isEmpty {
+            activity.cwd = cwd
+        }
         let day = DevHours.dayKey(stamp, calendar: calendar)
         let parts = calendar.dateComponents([.hour, .minute], from: stamp)
         var today = activity.days[day] ?? DayActivity()

@@ -89,6 +89,15 @@ final class ProjectLedgerTests: XCTestCase {
         XCTAssertEqual(file.load(), ledger)
     }
 
+    func testSubagentFolderNeverNamesTheSession() {
+        var ledger = UsageLedger()
+        ledger.ingest(Data(reply("2026-10-20T10:00:00Z", cwd: "/x", id: "s").utf8), session: "a", subagent: true, calendar: calendar)
+        XCTAssertEqual(ledger.sessions["a"]?.cwd, "/x", "better than nothing until the session's own file is read")
+        ledger.ingest(Data(user("2026-10-20T10:01:00Z", cwd: "/Users/ale/cliente").utf8), session: "a", calendar: calendar)
+        ledger.ingest(Data(reply("2026-10-20T10:02:00Z", cwd: "/y", id: "t").utf8), session: "a", subagent: true, calendar: calendar)
+        XCTAssertEqual(ledger.sessions["a"]?.cwd, "/Users/ale/cliente")
+    }
+
     func testFreshPanesStartWithTheirOwnSessionID() {
         var pane = SessionPane(kind: .local, title: "nueva", sessionID: "11111111-2222-3333-4444-555555555555", directory: "/tmp", startsNew: true)
         XCTAssertEqual(pane.shellCommand, "cd '/tmp' && exec claude --session-id '11111111-2222-3333-4444-555555555555'")
