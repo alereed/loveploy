@@ -119,17 +119,33 @@ enum Accounts {
     /// Where each account keeps its Claude Code sessions, plus who owns the sessions of the
     /// shared ~/.claude folder (the desktop app's Code tab lists them per account).
     static func localSources() -> (sources: [(root: URL, configDir: String?, account: String?)], owners: [String: String], titles: [String: String]) {
+        let index = UsageScan.sessionIndex(Engine.shared.profiles)
+        return (localRoots(), index.owners, index.titles)
+    }
+
+    /// Each account's `projects/` folder, and any other ~/.claude* folder (accounts set up by
+    /// hand with CLAUDE_CONFIG_DIR).
+    static func localRoots() -> [(root: URL, configDir: String?, account: String?)] {
         let profiles = Engine.shared.profiles
-        let index = UsageScan.sessionIndex(profiles)
         let home = FileManager.default.homeDirectoryForCurrentUser
         var sources: [(root: URL, configDir: String?, account: String?)] = [
             (home.appendingPathComponent(".claude/projects"), nil, profiles.first(where: \.isDefault)?.id.uuidString),
         ]
+        var seen: Set<String> = [home.appendingPathComponent(".claude").standardizedFileURL.path]
         for profile in profiles {
             guard let config = profile.codeConfigDir else { continue }
-            sources.append((URL(fileURLWithPath: config).appendingPathComponent("projects"), config, profile.id.uuidString))
+            let folder = URL(fileURLWithPath: config).standardizedFileURL
+            guard seen.insert(folder.path).inserted else { continue }
+            sources.append((folder.appendingPathComponent("projects"), config, profile.id.uuidString))
         }
-        return (sources, index.owners, index.titles)
+        let hidden = (try? FileManager.default.contentsOfDirectory(at: home, includingPropertiesForKeys: nil)) ?? []
+        for folder in hidden where folder.lastPathComponent.hasPrefix(".claude") {
+            let folder = folder.standardizedFileURL
+            let projects = folder.appendingPathComponent("projects")
+            guard FileManager.default.fileExists(atPath: projects.path), seen.insert(folder.path).inserted else { continue }
+            sources.append((projects, folder.path, nil))
+        }
+        return sources
     }
 }
 
@@ -264,6 +280,7 @@ final class PaneHosts: ObservableObject {
         let popups = WebPopups()
         self.popups.append(popups)
         web.uiDelegate = popups
+        web.navigationDelegate = popups
         if let url = pane.url.flatMap(URL.init(string:)) {
             web.load(URLRequest(url: url))
         }
@@ -302,15 +319,18 @@ final class TerminalObserver: NSObject, LocalProcessTerminalViewDelegate {
     }
 }
 
-/// Sign-in with Google and similar open a popup that reports back to the page.
+/// What a browser does that a bare WKWebView doesn't: popups (sign-in with Google reports
+/// back through one), downloads (to ~/Downloads) and the file picker for attachments.
 @MainActor
-final class WebPopups: NSObject, WKUIDelegate {
+final class WebPopups: NSObject, WKUIDelegate, WKNavigationDelegate, WKDownloadDelegate {
     private var windows: [NSWindow] = []
+    private var destinations: [ObjectIdentifier: URL] = [:]
 
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         let popup = WKWebView(frame: NSRect(x: 0, y: 0, width: 480, height: 640), configuration: configuration)
         popup.customUserAgent = LovableWeb.userAgent
         popup.uiDelegate = self
+        popup.navigationDelegate = self
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 480, height: 640),
             styleMask: [.titled, .closable, .resizable],
@@ -331,6 +351,80 @@ final class WebPopups: NSObject, WKUIDelegate {
             window.close()
             windows.removeAll { $0 === window }
         }
+    }
+
+    // MARK: Attachments
+
+    func webView(_ webView: WKWebView, runOpenPanelWith parameters: WKOpenPanelParameters, initiatedByFrame frame: WKFrameInfo) async -> [URL]? {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = parameters.allowsDirectories
+        panel.allowsMultipleSelection = parameters.allowsMultipleSelection
+        let response: NSApplication.ModalResponse
+        if let window = webView.window {
+            response = await panel.beginSheetModal(for: window)
+        } else {
+            response = panel.runModal()
+        }
+        return response == .OK ? panel.urls : nil
+    }
+
+    // MARK: Downloads
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
+        navigationAction.shouldPerformDownload ? .download : .allow
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse) async -> WKNavigationResponsePolicy {
+        let disposition = (navigationResponse.response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Disposition") ?? ""
+        let attachment = disposition.lowercased().hasPrefix("attachment")
+        return navigationResponse.canShowMIMEType && !attachment ? .allow : .download
+    }
+
+    func webView(_ webView: WKWebView, navigationAction: WKNavigationAction, didBecome download: WKDownload) {
+        download.delegate = self
+    }
+
+    func webView(_ webView: WKWebView, navigationResponse: WKNavigationResponse, didBecome download: WKDownload) {
+        download.delegate = self
+    }
+
+    func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String) async -> URL? {
+        let url = Self.freeDownloadURL(for: suggestedFilename)
+        destinations[ObjectIdentifier(download)] = url
+        return url
+    }
+
+    func downloadDidFinish(_ download: WKDownload) {
+        guard let url = destinations.removeValue(forKey: ObjectIdentifier(download)) else { return }
+        // Bounces the Downloads stack in the Dock, like Safari does.
+        DistributedNotificationCenter.default().post(name: .init("com.apple.DownloadFileFinished"), object: url.path)
+        NSWorkspace.shared.activateFileViewerSelecting([url])
+    }
+
+    func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) {
+        let url = destinations.removeValue(forKey: ObjectIdentifier(download))
+        let alert = NSAlert()
+        alert.messageText = "No se pudo descargar \(url?.lastPathComponent ?? "el archivo")"
+        alert.informativeText = error.localizedDescription
+        alert.runModal()
+    }
+
+    /// ~/Downloads/name.ext, or "name 2.ext" and so on when it's taken.
+    static func freeDownloadURL(for suggested: String) -> URL {
+        let folder = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads")
+        let name = suggested.replacingOccurrences(of: "/", with: "-").trimmingCharacters(in: .whitespaces)
+        let file = name.isEmpty ? "descarga" : name
+        let base = (file as NSString).deletingPathExtension
+        let ext = (file as NSString).pathExtension
+        var candidate = folder.appendingPathComponent(file)
+        var n = 2
+        while FileManager.default.fileExists(atPath: candidate.path) {
+            candidate = folder.appendingPathComponent(ext.isEmpty ? "\(base) \(n)" : "\(base) \(n).\(ext)")
+            n += 1
+        }
+        return candidate
     }
 }
 
@@ -408,8 +502,8 @@ struct GroupView: View {
                 Label("Agregar sesión", systemImage: "plus")
             }
             .disabled(group.isFull)
-            .popover(isPresented: $adding, arrowEdge: .bottom) {
-                AddPaneView(groupID: groupID)
+            .sheet(isPresented: $adding) {
+                AddPaneView(groupID: groupID) { adding = false }
             }
         }
         .padding(.horizontal, 14)
@@ -556,13 +650,17 @@ struct FoundSession: Identifiable, Sendable {
 
 struct AddPaneView: View {
     let groupID: UUID
+    var done: () -> Void = {}
     @ObservedObject private var groups = SessionGroups.shared
     @ObservedObject private var engine = Engine.shared
-    @State private var tab = 0
+    @AppStorage("loveploy.addTab") private var tab = 0
+    @AppStorage("loveploy.addByFolder") private var byFolder = true
     @State private var sessions: [FoundSession] = []
+    @State private var scanned: [String] = []
     @State private var loading = true
     @State private var query = ""
-    @State private var added: Set<String> = []
+    @State private var accountFilter = "*"
+    @State private var picked: [String] = []
     @State private var localAccount: String?
     @State private var cloudAccount: String?
     @State private var cloudURL = ""
@@ -571,22 +669,27 @@ struct AddPaneView: View {
 
     private var group: SessionGroup? { groups.group(groupID) }
     private var full: Bool { group?.isFull ?? true }
+    private var room: Int { SessionGroup.maxPanes - (group?.panes.count ?? SessionGroup.maxPanes) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Agregar sesiones a «\(group?.name ?? "")»").font(.headline)
+                Spacer()
+                Text(full ? "El grupo ya tiene 8 sesiones" : "Quedan \(room) lugar\(room == 1 ? "" : "es")")
+                    .font(.caption)
+                    .foregroundStyle(full ? .orange : .secondary)
+            }
             Picker("", selection: $tab) {
-                Text("En esta Mac").tag(0)
+                Text("En esta Mac (\(sessions.count))").tag(0)
                 Text("En la nube (claude.ai/code)").tag(1)
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            if full {
-                Text("El grupo ya tiene 8 sesiones.").font(.caption).foregroundStyle(.orange)
-            }
             if tab == 0 { local } else { cloud }
         }
-        .padding(14)
-        .frame(width: 560, height: 500)
+        .padding(16)
+        .frame(minWidth: 720, idealWidth: 780, minHeight: 560, idealHeight: 640)
         .task { await load() }
         .onAppear {
             let fallback = engine.profiles.first?.id.uuidString
@@ -599,56 +702,147 @@ struct AddPaneView: View {
 
     private var local: some View {
         VStack(alignment: .leading, spacing: 8) {
-            TextField("Buscar por título, proyecto o cuenta", text: $query)
-                .textFieldStyle(.roundedBorder)
+            HStack {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField("Buscar por título, carpeta o cuenta", text: $query)
+                    .textFieldStyle(.roundedBorder)
+                Picker("", selection: $accountFilter) {
+                    Text("Todas las cuentas").tag("*")
+                    ForEach(engine.profiles) { profile in
+                        Text(profile.name).tag(profile.id.uuidString)
+                    }
+                    Text("Sin cuenta asignada").tag("")
+                }
+                .labelsHidden()
+                .fixedSize()
+                Toggle("Por carpeta", isOn: $byFolder).toggleStyle(.checkbox)
+                Button {
+                    Task { await load() }
+                } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .help("Volver a buscar")
+            }
             if loading {
                 ProgressView("Buscando sesiones…").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if filtered.isEmpty {
-                Text("No hay sesiones de Claude Code en esta Mac\(query.isEmpty ? "" : " con ese texto").")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List(filtered) { item in
-                    sessionRow(item.session, account: item.account)
+                VStack(spacing: 6) {
+                    Text(sessions.isEmpty ? "No encontré sesiones de Claude Code en esta Mac." : "Ninguna sesión coincide con el filtro.")
+                    if sessions.isEmpty {
+                        Text("Busqué en:").font(.caption).foregroundStyle(.secondary)
+                        ForEach(scanned, id: \.self) { Text($0).font(.caption.monospaced()).foregroundStyle(.secondary) }
+                    }
                 }
-                .listStyle(.inset)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List {
+                    if byFolder {
+                        ForEach(folders, id: \.path) { folder in
+                            Section {
+                                ForEach(folder.items) { sessionRow($0) }
+                            } header: {
+                                HStack {
+                                    Image(systemName: "folder")
+                                    Text(folder.name).bold()
+                                    Text(folder.path).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                                }
+                            }
+                        }
+                    } else {
+                        ForEach(filtered) { sessionRow($0) }
+                    }
+                }
+                .listStyle(.inset(alternatesRowBackgrounds: true))
             }
             Divider()
             HStack {
-                Text("Nueva sesión en una carpeta:").font(.system(size: 12))
+                Button("Nueva sesión en una carpeta…") { newLocalSession() }.disabled(full)
                 accountPicker($localAccount)
                 Spacer()
-                Button("Elegir carpeta…") { newLocalSession() }.disabled(full)
+                if !picked.isEmpty {
+                    Button("Quitar selección") { picked = [] }
+                }
+                Button("Cerrar") { done() }.keyboardShortcut(.cancelAction)
+                Button(picked.isEmpty ? "Agregar" : "Agregar \(picked.count)") { addPicked() }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(picked.isEmpty)
             }
         }
     }
 
     private var filtered: [FoundSession] {
         let q = query.trimmingCharacters(in: .whitespaces).lowercased()
-        guard !q.isEmpty else { return sessions }
         return sessions.filter { item in
-            item.session.title.lowercased().contains(q) || item.session.project.lowercased().contains(q)
+            if accountFilter != "*", (item.account ?? "") != accountFilter { return false }
+            guard !q.isEmpty else { return true }
+            return item.session.title.lowercased().contains(q) || item.session.cwd.lowercased().contains(q)
                 || Accounts.name(item.account).lowercased().contains(q)
         }
     }
 
-    private func sessionRow(_ session: LocalSession, account: String?) -> some View {
-        let isAdded = added.contains(session.transcript)
+    /// Sessions by folder, the folder with the newest session first.
+    private var folders: [(name: String, path: String, items: [FoundSession])] {
+        var order: [String] = []
+        var byPath: [String: [FoundSession]] = [:]
+        for item in filtered {
+            if byPath[item.session.cwd] == nil { order.append(item.session.cwd) }
+            byPath[item.session.cwd, default: []].append(item)
+        }
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        return order.map { path in
+            let shown = path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
+            return (URL(fileURLWithPath: path).lastPathComponent, shown, byPath[path] ?? [])
+        }
+    }
+
+    private func inGroup(_ session: LocalSession) -> Bool {
+        group?.panes.contains { $0.sessionID == session.id } ?? false
+    }
+
+    private func sessionRow(_ item: FoundSession) -> some View {
+        let session = item.session
+        let already = inGroup(session)
+        let isPicked = picked.contains(item.id)
         return HStack(spacing: 8) {
-            Circle().fill(Accounts.tint(account)).frame(width: 8, height: 8)
+            Toggle("", isOn: Binding(
+                get: { already || isPicked },
+                set: { on in
+                    if on { if picked.count < room { picked.append(item.id) } } else { picked.removeAll { $0 == item.id } }
+                }
+            ))
+            .toggleStyle(.checkbox)
+            .labelsHidden()
+            .disabled(already || (!isPicked && picked.count >= room))
+            Circle().fill(Accounts.tint(item.account)).frame(width: 8, height: 8)
             VStack(alignment: .leading, spacing: 2) {
                 Text(session.title).lineLimit(1)
-                Text("\(session.project) · \(Accounts.name(account)) · \(session.modified.formatted(.relative(presentation: .named)))")
+                Text("\(byFolder ? "" : session.project + " · ")\(Accounts.name(item.account)) · \(session.modified.formatted(.relative(presentation: .named)))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             }
             Spacer()
-            Button(isAdded ? "Agregada" : "Agregar") {
-                if groups.add(.local(session, account: account), to: groupID) { added.insert(session.transcript) }
+            if already {
+                Text("En el grupo").font(.caption).foregroundStyle(.secondary)
+            } else {
+                Button("Agregar") {
+                    if groups.add(.local(session, account: item.account), to: groupID) { picked.removeAll { $0 == item.id } }
+                }
+                .disabled(full)
             }
-            .disabled(isAdded || full)
         }
+        .contentShape(Rectangle())
+    }
+
+    private func addPicked() {
+        let byID = Dictionary(sessions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for id in picked {
+            guard let item = byID[id] else { continue }
+            groups.add(.local(item.session, account: item.account), to: groupID)
+        }
+        picked = []
+        done()
     }
 
     private func newLocalSession() {
@@ -665,11 +859,15 @@ struct AddPaneView: View {
     }
 
     private func load() async {
+        loading = true
         let (sources, owners, titles) = Accounts.localSources()
+        scanned = sources.map(\.root.path)
         let found = await Task.detached(priority: .userInitiated) { () -> [FoundSession] in
             var all: [FoundSession] = []
+            var seen = Set<String>()
             for source in sources {
-                for session in LocalSessionScanner.scan(projectsRoot: source.root, configDir: source.configDir, titles: titles, limit: 200) {
+                for session in LocalSessionScanner.scan(projectsRoot: source.root, configDir: source.configDir, titles: titles, limit: 400)
+                where seen.insert(session.id).inserted {
                     // ~/.claude holds every account's Code tab sessions; the desktop app says whose each one is.
                     let account = source.configDir == nil ? (owners[session.id] ?? source.account) : source.account
                     all.append(FoundSession(session: session, account: account))
@@ -701,8 +899,8 @@ struct AddPaneView: View {
                 Text(cloudError).font(.caption).foregroundStyle(.red)
             }
             HStack {
-                Button("Nueva sesión en la nube") {
-                    addCloud("https://claude.ai/code", title: cloudTitle.isEmpty ? "Nueva sesión" : cloudTitle)
+                Button("Abrir claude.ai/code y elegir ahí") {
+                    addCloud("https://claude.ai/code", title: cloudTitle.isEmpty ? "Claude Code (nube)" : cloudTitle)
                 }
                 .disabled(full)
                 Spacer()
@@ -715,6 +913,10 @@ struct AddPaneView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             Spacer()
+            HStack {
+                Spacer()
+                Button("Cerrar") { done() }.keyboardShortcut(.cancelAction)
+            }
         }
     }
 

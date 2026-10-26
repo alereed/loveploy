@@ -4783,7 +4783,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let tint: NSColor? = front?.nsTint ?? (count > 0 && engine.isOn(.coloredIcon) ? .claude : nil)
         // Keep-awake adds a bolt next to the asterisk, orange with Colored Menu Bar Icon on.
         let bolt: NSColor?? = Awake.shared.active ? .some(engine.isOn(.coloredIcon) ? .claude : nil) : .none
-        b.image = MenuBarIcon.make(tint: tint, bolt: bolt)
+        b.image = WeeklyLimit.decorate(MenuBarIcon.make(tint: tint, bolt: bolt))   // Loveploy: the week that's left
         if let front {
             b.title = " " + (front.name.count > 18 ? front.name.prefix(17) + "…" : front.name)
         } else {

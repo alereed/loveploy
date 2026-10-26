@@ -26,6 +26,7 @@ enum LoveployBridge {
     }
 
     static func start() {
+        installMainMenu()
         let model = AppModel()
         self.model = model
         // The menu bar shows how many projects wait to publish.
@@ -33,7 +34,52 @@ enum LoveployBridge {
             .debounce(for: .milliseconds(300), scheduler: DispatchQueue.main)
             .sink { _ in MainActor.assumeIsolated { Engine.shared.onChange?() } }
             .store(in: &observers)
+        // The menu bar shows how much of the week is left.
+        Usage.shared.$limits
+            .receive(on: DispatchQueue.main)
+            .sink { _ in MainActor.assumeIsolated { Engine.shared.onChange?() } }
+            .store(in: &observers)
+        DevClock.shared.start()
         SessionGroups.shared.openAtLaunch()
+    }
+
+    /// A menu-bar-only app has no main menu, and without one ⌘C/⌘V/⌘X/⌘A/⌘Z do nothing
+    /// in text fields and terminals (only right-click → Paste worked). Key equivalents still
+    /// go through the main menu while it isn't shown, so give the app the standard one.
+    static func installMainMenu() {
+        let main = NSMenu()
+
+        let app = NSMenu(title: "Loveploy")
+        app.addItem(withTitle: "Ocultar Loveploy", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        app.addItem(.separator())
+        app.addItem(withTitle: "Salir de Loveploy", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        main.addItem(submenu: app, title: "Loveploy")
+
+        let edit = NSMenu(title: "Edición")
+        edit.addItem(withTitle: "Deshacer", action: Selector(("undo:")), keyEquivalent: "z")
+        let redo = edit.addItem(withTitle: "Rehacer", action: Selector(("redo:")), keyEquivalent: "z")
+        redo.keyEquivalentModifierMask = [.command, .shift]
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "Cortar", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copiar", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Pegar", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        let plain = edit.addItem(withTitle: "Pegar sin formato", action: #selector(NSTextView.pasteAsPlainText(_:)), keyEquivalent: "v")
+        plain.keyEquivalentModifierMask = [.command, .option, .shift]
+        edit.addItem(withTitle: "Seleccionar todo", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        edit.addItem(.separator())
+        edit.addItem(withTitle: "Buscar…", action: #selector(NSResponder.performTextFinderAction(_:)), keyEquivalent: "f")
+            .tag = NSTextFinder.Action.showFindInterface.rawValue
+        main.addItem(submenu: edit, title: "Edición")
+
+        let window = NSMenu(title: "Ventana")
+        window.addItem(withTitle: "Cerrar", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        window.addItem(withTitle: "Minimizar", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
+        window.addItem(withTitle: "Pantalla completa", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
+            .keyEquivalentModifierMask = [.command, .control]
+        main.addItem(submenu: window, title: "Ventana")
+        NSApp.windowsMenu = window
+
+        NSApp.mainMenu = main
     }
 
     /// " ♥3" after the menu bar icon while Lovable projects are out of date.
@@ -43,12 +89,22 @@ enum LoveployBridge {
     }
 }
 
+private extension NSMenu {
+    func addItem(submenu: NSMenu, title: String) {
+        let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        item.submenu = submenu
+        addItem(item)
+    }
+}
+
 /// The panel sections Loveploy adds: Lovable and session groups.
 struct LoveploySections: View {
+    @AppStorage("loveploy.consumptionOpen") private var consumptionOpen = true
     @AppStorage("loveploy.lovableOpen") private var lovableOpen = true
     @AppStorage("loveploy.groupsOpen") private var groupsOpen = true
 
     var body: some View {
+        ConsumptionSection(open: $consumptionOpen)
         if let model = LoveployBridge.model {
             LovableSection(model: model, open: $lovableOpen)
         }

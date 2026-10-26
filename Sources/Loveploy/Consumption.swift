@@ -1,0 +1,216 @@
+import AppKit
+import Combine
+import LoveployCore
+import SwiftUI
+
+// Loveploy: how much of each account's weekly limit is left, in the panel and the menu bar,
+// and how many hours went into development (from Claude Code's transcripts).
+
+/// Keeps `DevHours` up to date, reading only what the transcripts gained.
+@MainActor
+final class DevClock: ObservableObject {
+    static let shared = DevClock()
+    @Published private(set) var hours = DevHours()
+    private var timer: Timer?
+    private var scanning = false
+    private let store = DevHoursStore()
+
+    func start() {
+        guard timer == nil else { return }
+        hours = store.load()
+        timer = Timer(timeInterval: 120, repeats: true) { _ in MainActor.assumeIsolated { DevClock.shared.refresh() } }
+        RunLoop.main.add(timer!, forMode: .common)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { DevClock.shared.refresh() }
+    }
+
+    func refresh() {
+        guard !scanning else { return }
+        scanning = true
+        var roots = Accounts.localRoots().map(\.root)
+        roots += Engine.shared.profiles.map { $0.folderURL.appendingPathComponent("local-agent-mode-sessions") }
+        let current = hours
+        let store = store
+        Task.detached(priority: .utility) {
+            var updated = current
+            updated.scan(roots: roots)
+            try? store.save(updated)
+            let result = updated
+            await MainActor.run {
+                DevClock.shared.hours = result
+                DevClock.shared.scanning = false
+            }
+        }
+    }
+}
+
+/// The weekly limit closest to running out, for the menu bar.
+@MainActor
+enum WeeklyLimit {
+    static var showInMenuBar: Bool {
+        UserDefaults.standard.object(forKey: "loveploy.weekInMenuBar") as? Bool ?? true
+    }
+
+    static func tightest() -> (profile: Profile, limit: ChatLimits.Limit)? {
+        Engine.shared.profiles
+            .compactMap { profile in Usage.shared.limits[profile.id.uuidString]?.week.map { (profile, $0) } }
+            .max { $0.1.percent < $1.1.percent }
+    }
+
+    static func left(_ limit: ChatLimits.Limit) -> Int {
+        max(0, 100 - Int(limit.percent.rounded()))
+    }
+
+    /// "en 2 d 4 h", "en 3 h 10 min".
+    static func resets(_ date: Date?) -> String? {
+        guard let date else { return nil }
+        let seconds = max(0, Int(date.timeIntervalSinceNow))
+        let days = seconds / 86_400, hours = (seconds % 86_400) / 3600, minutes = (seconds % 3600) / 60
+        if days > 0 { return "en \(days) d \(hours) h" }
+        if hours > 0 { return "en \(hours) h \(minutes) min" }
+        return "en \(minutes) min"
+    }
+
+    /// The menu bar icon followed by a small battery of the week that's left and its percentage.
+    static func decorate(_ icon: NSImage?) -> NSImage? {
+        guard showInMenuBar, let icon, let limit = tightest()?.limit else { return icon }
+        let left = left(limit)
+        let low = left <= 15
+        let template = icon.isTemplate && !low
+        let text = NSAttributedString(string: "\(left)%", attributes: [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .semibold),
+            .foregroundColor: template ? NSColor.black : (low ? NSColor.systemRed : NSColor.labelColor),
+        ])
+        let bar = NSSize(width: 22, height: 8)
+        let gap: CGFloat = 4
+        let size = NSSize(width: icon.size.width + gap + bar.width + 3 + text.size().width, height: max(icon.size.height, 14))
+        let image = NSImage(size: size, flipped: false) { _ in
+            icon.draw(in: NSRect(x: 0, y: (size.height - icon.size.height) / 2, width: icon.size.width, height: icon.size.height))
+            let color: NSColor = template ? .black : (low ? .systemRed : .labelColor)
+            let frame = NSRect(x: icon.size.width + gap, y: (size.height - bar.height) / 2, width: bar.width, height: bar.height)
+            color.withAlphaComponent(0.35).setStroke()
+            let outline = NSBezierPath(roundedRect: frame.insetBy(dx: 0.5, dy: 0.5), xRadius: 2.5, yRadius: 2.5)
+            outline.lineWidth = 1
+            outline.stroke()
+            color.setFill()
+            let fill = NSRect(x: frame.minX + 1.5, y: frame.minY + 1.5, width: max(1, (frame.width - 3) * CGFloat(left) / 100), height: frame.height - 3)
+            NSBezierPath(roundedRect: fill, xRadius: 1.5, yRadius: 1.5).fill()
+            text.draw(at: NSPoint(x: frame.maxX + 3, y: (size.height - text.size().height) / 2))
+            return true
+        }
+        image.isTemplate = template
+        image.accessibilityDescription = "Loveploy, queda \(left)% del límite semanal"
+        return image
+    }
+}
+
+/// The panel's "Consumo" section.
+struct ConsumptionSection: View {
+    @ObservedObject private var usage = Usage.shared
+    @ObservedObject private var engine = Engine.shared
+    @ObservedObject private var clock = DevClock.shared
+    @AppStorage("loveploy.weekInMenuBar") private var weekInMenuBar = true
+    @Binding var open: Bool
+
+    var body: some View {
+        Divider().padding(.horizontal, 14)
+        SectionHeader(title: "Consumo", trailing: trailing, open: $open)
+        if open {
+            VStack(alignment: .leading, spacing: 4) {
+                if engine.isOn(.chatLimits) {
+                    let accounts = engine.profiles.filter { usage.limits[$0.id.uuidString] != nil }
+                    if accounts.isEmpty {
+                        Text("Consultando claude.ai…").font(.system(size: 12)).foregroundStyle(.secondary).padding(.horizontal, 8)
+                    }
+                    ForEach(accounts) { profile in
+                        WeekRow(profile: profile, snapshot: usage.limits[profile.id.uuidString]!)
+                    }
+                } else {
+                    PlainRow(title: "Mostrar cuánto queda de la semana…") { engine.toggle(.chatLimits) }
+                }
+                devRow
+                if engine.isOn(.chatLimits) {
+                    ToggleRow(symbol: "menubar.rectangle", title: "Semana en la barra de menú", hint: nil, on: weekInMenuBar) {
+                        weekInMenuBar.toggle()
+                        engine.onChange?()
+                    }
+                }
+                PlainRow(title: "Ver consumo detallado…") {
+                    PanelController.shared.close()
+                    UsageWindow.show()
+                }
+            }
+            .padding(.horizontal, 6)
+            .padding(.bottom, 5)
+        }
+    }
+
+    private var trailing: String? {
+        guard engine.isOn(.chatLimits), let limit = WeeklyLimit.tightest()?.limit else {
+            return "Hoy " + DevHours.format(minutes: clock.hours.minutes(on: Date()))
+        }
+        return "Queda \(WeeklyLimit.left(limit))% de la semana"
+    }
+
+    private var devRow: some View {
+        let hours = clock.hours
+        return HStack(spacing: 8) {
+            Image(systemName: "hammer.fill").font(.system(size: 11)).foregroundStyle(.secondary).frame(width: 16)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Horas de desarrollo").font(.system(size: 13))
+                Text("Hoy \(DevHours.format(minutes: hours.minutes(on: Date()))) · semana \(DevHours.format(minutes: hours.minutesThisWeek())) · 30 días \(DevHours.format(minutes: hours.minutes(lastDays: 30)))")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+            Spacer()
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .help("Cada bloque de 5 minutos en que tú o Claude Code escribieron en una sesión de esta Mac.")
+    }
+}
+
+/// One account: a wide bar of the week that's left, and the 5-hour window.
+struct WeekRow: View {
+    let profile: Profile
+    let snapshot: ChatLimits.Snapshot
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 6) {
+                Circle().fill(profile.tint).frame(width: 8, height: 8)
+                Text(profile.name).font(.system(size: 13)).lineLimit(1)
+                Spacer()
+                if let week = snapshot.week {
+                    Text("Queda \(WeeklyLimit.left(week))%").font(.system(size: 12, weight: .semibold)).monospacedDigit()
+                        .foregroundStyle(WeeklyLimit.left(week) <= 15 ? Color.red : Color.primary)
+                }
+            }
+            if let error = snapshot.error {
+                Text(error).font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            if let week = snapshot.week {
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.primary.opacity(0.12))
+                        Capsule().fill(WeeklyLimit.left(week) <= 15 ? Color.red : profile.tint)
+                            .frame(width: max(3, proxy.size.width * CGFloat(WeeklyLimit.left(week)) / 100))
+                    }
+                }
+                .frame(height: 6)
+                HStack(spacing: 4) {
+                    Text("Semana: \(Int(week.percent.rounded()))% usado" + (WeeklyLimit.resets(week.resetsAt).map { " · se renueva \($0)" } ?? ""))
+                    Spacer()
+                    if let five = snapshot.fiveHour {
+                        Text("5 h: \(Int(five.percent.rounded()))%" + (WeeklyLimit.resets(five.resetsAt).map { " · \($0)" } ?? ""))
+                    }
+                }
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+    }
+}

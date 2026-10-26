@@ -208,7 +208,7 @@ final class AppModel: ObservableObject {
             return
         }
 
-        var newRows = await loadDetails(for: listed)
+        var newRows = await loadDetails(for: listed, errors: &newErrors)
         newRows = await attachGit(to: newRows)
         newRows = await attachIOS(to: newRows)
         if let hub {
@@ -230,15 +230,27 @@ final class AppModel: ObservableObject {
         runTurbo()
     }
 
-    /// `GET /projects/{id}/details` for every project, eight at a time.
-    private func loadDetails(for listed: [(ProjectSummary, Workspace)]) async -> [ProjectRow] {
+    /// The whole project from Lovable's realtime feed (what the editor reads), and
+    /// `GET /projects/{id}/details` for any project it didn't answer, eight at a time.
+    private func loadDetails(for listed: [(ProjectSummary, Workspace)], errors: inout [String]) async -> [ProjectRow] {
         let client = client
+        var fetched: [String: ProjectDetails] = [:]
+        do {
+            fetched = try await LovableRealtime(session: session).projects(ids: listed.map(\.0.id))
+        } catch {
+            errors.append("Tiempo real de Lovable: \(error.localizedDescription). Se usó la vista resumida.")
+        }
+        let live = fetched
         return await withTaskGroup(of: ProjectRow.self) { group in
             var queue = listed[...]
             var rows: [ProjectRow] = []
             func startNext() {
                 guard let item = queue.popFirst() else { return }
                 let (summary, workspace) = item
+                if let details = live[summary.id] {
+                    group.addTask { ProjectRow(summary: summary, workspace: workspace, details: details) }
+                    return
+                }
                 group.addTask {
                     do {
                         let details = try await client.details(projectID: summary.id)
