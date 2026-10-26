@@ -232,9 +232,10 @@ struct GroupsManagerView: View {
                 ForEach(groups.groups) { group in
                     GroupManagerRow(group: group)
                 }
+                .onMove { groups.move(fromOffsets: $0, toOffset: $1) }
             }
             .listStyle(.inset(alternatesRowBackgrounds: true))
-            Text("Cada grupo abre hasta 8 sesiones de Claude Code en una ventana dividida. La tecla rápida trae su ventana al frente desde cualquier app, y el proyecto suma sus horas y tokens para cobrar.")
+            Text("Arrastra los grupos (o usa las flechas) para cambiar su orden; el panel de la barra los muestra en ese orden. Cada grupo abre hasta 8 sesiones de Claude Code en una ventana dividida. La tecla rápida trae su ventana al frente desde cualquier app, y el proyecto suma sus horas y tokens para cobrar.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .padding(20)
@@ -253,6 +254,15 @@ struct GroupManagerRow: View {
 
     var body: some View {
         HStack(spacing: 12) {
+            Image(systemName: "line.3.horizontal").foregroundStyle(.tertiary).help("Arrastra para reacomodar")
+            VStack(spacing: 0) {
+                Button { groups.move(group.id, by: -1) } label: { Image(systemName: "chevron.up") }
+                    .disabled(groups.groups.first?.id == group.id)
+                Button { groups.move(group.id, by: 1) } label: { Image(systemName: "chevron.down") }
+                    .disabled(groups.groups.last?.id == group.id)
+            }
+            .buttonStyle(.borderless)
+            .font(.system(size: 9, weight: .semibold))
             Image(systemName: group.layout.symbol).foregroundStyle(groups.isOpen(group.id) ? Color.accentColor : .secondary)
             TextField("Nombre", text: $name)
                 .textFieldStyle(.plain)

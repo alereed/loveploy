@@ -48,6 +48,19 @@ final class SessionGroups: ObservableObject {
         }
     }
 
+    /// Reorders the groups (drag in the Loveploy window); the panel lists them in this order.
+    func move(fromOffsets source: IndexSet, toOffset destination: Int) {
+        groups.move(fromOffsets: source, toOffset: destination)
+        save()
+    }
+
+    /// Moves one group a place up (-1) or down (+1).
+    func move(_ id: UUID, by offset: Int) {
+        guard let index = groups.firstIndex(where: { $0.id == id }), groups.indices.contains(index + offset) else { return }
+        groups.swapAt(index, index + offset)
+        save()
+    }
+
     /// Every pane of the group's window the same width (and the same height in each column).
     func equalize(_ id: UUID) {
         windows[id]?.equalize()
@@ -1378,6 +1391,9 @@ struct GroupRow: View {
             } else if let next = GroupShortcut.suggestion(taken: groups.groups.map(\.shortcut)) {
                 Button("Tecla rápida \(next.display)") { groups.setShortcut(next, for: group.id) }
             }
+            Divider()
+            Button("Subir") { groups.move(group.id, by: -1) }.disabled(groups.groups.first?.id == group.id)
+            Button("Bajar") { groups.move(group.id, by: 1) }.disabled(groups.groups.last?.id == group.id)
             Divider()
             Button("Eliminar grupo", role: .destructive) { groups.delete(group.id) }
         }
