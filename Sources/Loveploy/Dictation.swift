@@ -1,5 +1,6 @@
 import AVFoundation
 import AppKit
+import LoveployCore
 import Speech
 import SwiftTerm
 import SwiftUI
