@@ -120,8 +120,8 @@ final class Dictation: ObservableObject {
         let text = heard.trimmingCharacters(in: .whitespacesAndNewlines)
         if !text.isEmpty {
             if let target {
-                Self.insert(text, into: target)
-                if send { Self.submit(target) }
+                let send = self.send
+                Self.insert(text, into: target) { if send { Self.submit(target) } }
             } else if pane == Self.anywhere {
                 Self.paste(text, pressReturn: send)
             }
@@ -190,35 +190,61 @@ final class Dictation: ObservableObject {
     }
 
     /// Types the text where the pane's cursor is (claude.ai's message box, or the terminal).
-    static func insert(_ text: String, into view: NSView) {
+    /// On claude.ai it's pasted like ⌘V (the page takes a paste the same way as typing), into
+    /// the message box with the cursor at the end unless you were already typing in it.
+    static func insert(_ text: String, into view: NSView, then: (() -> Void)? = nil) {
         if let terminal = view as? TerminalView {
             terminal.send(txt: text)
             terminal.window?.makeFirstResponder(terminal)
+            then?()
         } else if let web = view as? WKWebView {
-            let literal = (try? JSONSerialization.data(withJSONObject: [text])).flatMap { String(data: $0, encoding: .utf8) } ?? "[\"\"]"
-            let js = """
-            (function (t) {
-              var el = document.activeElement;
-              var editable = function (e) { return e && (e.isContentEditable || e.tagName === 'TEXTAREA' || (e.tagName === 'INPUT' && /text|search/.test(e.type))); };
-              if (!editable(el)) {
-                var all = document.querySelectorAll('[contenteditable="true"], textarea');
-                el = all[all.length - 1];
-              }
-              if (!el) return false;
-              el.focus();
-              var read = function () { return 'value' in el ? el.value : el.textContent; };
-              var before = read();
-              document.execCommand('insertText', false, t);
-              // Some editors take the text but report failure: only add it if it isn't there.
-              if (read() === before) {
-                if ('value' in el) { el.value += t; el.dispatchEvent(new Event('input', { bubbles: true })); }
-                else { el.textContent += t; el.dispatchEvent(new InputEvent('input', { bubbles: true })); }
-              }
-              return true;
-            })(\(literal)[0])
-            """
             web.window?.makeFirstResponder(web)
-            web.evaluateJavaScript(js)
+            web.evaluateJavaScript(focusComposer) { _, _ in
+                MainActor.assumeIsolated {
+                    paste(text, into: web)
+                    if let then { DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: then) }
+                }
+            }
+        }
+    }
+
+    /// Puts the cursor in claude.ai's message box: the field you were in, or else the visible
+    /// box lowest on the page, with the cursor at its end.
+    static let focusComposer = """
+    (function () {
+      var visible = function (e) { var r = e.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
+      var field = function (e) { return e && (e.isContentEditable || e.tagName === 'TEXTAREA') && visible(e); };
+      var el = document.activeElement;
+      if (field(el)) return true;
+      var all = Array.prototype.slice.call(document.querySelectorAll('[contenteditable="true"], textarea')).filter(visible);
+      all.sort(function (a, b) { return b.getBoundingClientRect().bottom - a.getBoundingClientRect().bottom; });
+      el = all[0];
+      if (!el) return false;
+      el.focus();
+      if (el.tagName === 'TEXTAREA') {
+        el.setSelectionRange(el.value.length, el.value.length);
+      } else {
+        var range = document.createRange();
+        range.selectNodeContents(el);
+        range.collapse(false);
+        var selection = window.getSelection();
+        selection.removeAllRanges();
+        selection.addRange(range);
+      }
+      return true;
+    })()
+    """
+
+    /// ⌘V into the web view, then the clipboard gets its text back.
+    static func paste(_ text: String, into web: WKWebView) {
+        let board = NSPasteboard.general
+        let saved = board.string(forType: .string)
+        board.clearContents()
+        board.setString(text, forType: .string)
+        NSApp.sendAction(#selector(NSText.paste(_:)), to: web, from: nil)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            board.clearContents()
+            if let saved { board.setString(saved, forType: .string) }
         }
     }
 
@@ -300,6 +326,7 @@ struct DictationButton: View {
                 }
             }
         }
+        .focusable(false)
         .help(active ? "Clic para terminar: el texto se escribe donde estabas" : "Dictar: habla y el texto se escribe donde estás escribiendo")
     }
 }
