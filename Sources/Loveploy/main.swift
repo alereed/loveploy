@@ -2606,13 +2606,37 @@ enum ChatLimits {
         return String(data: plain, encoding: .utf8)
     }
 
+    // Loveploy: newer Claude versions keep cookies in Network/Cookies, and a fresh sign-in can still
+    // be in the -wal file; read whichever database is newer, from a private copy with its WAL, so
+    // every account is found (it missed accounts set up with a recent Claude).
     static func sessionKey(in folder: URL, key: Data) -> String? {
-        let db = folder.appendingPathComponent("Cookies")
-        guard FileManager.default.fileExists(atPath: db.path) else { return nil }
+        let fm = FileManager.default
+        let candidates = [folder.appendingPathComponent("Network/Cookies"), folder.appendingPathComponent("Cookies")]
+            .filter { fm.fileExists(atPath: $0.path) }
+            .sorted {
+                let a = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                let b = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+                return a > b
+            }
+        for db in candidates {
+            if let value = sessionKey(database: db, key: key) { return value }
+        }
+        return nil
+    }
+
+    static func sessionKey(database db: URL, key: Data) -> String? {
+        let fm = FileManager.default
+        let copy = fm.temporaryDirectory.appendingPathComponent("bp-cookies-\(UUID().uuidString)")
+        guard (try? fm.createDirectory(at: copy, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])) != nil else { return nil }
+        defer { try? fm.removeItem(at: copy) }
+        let local = copy.appendingPathComponent("Cookies")
+        guard (try? fm.copyItem(at: db, to: local)) != nil else { return nil }
+        for suffix in ["-wal", "-shm"] {
+            let side = URL(fileURLWithPath: db.path + suffix)
+            if fm.fileExists(atPath: side.path) { try? fm.copyItem(at: side, to: URL(fileURLWithPath: local.path + suffix)) }
+        }
         var h: OpaquePointer?
-        // immutable=1 reads without taking Claude's lock.
-        guard sqlite3_open_v2("file:\(db.path.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? db.path)?immutable=1", &h,
-                              SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, nil) == SQLITE_OK else { sqlite3_close(h); return nil }
+        guard sqlite3_open_v2(local.path, &h, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else { sqlite3_close(h); return nil }
         defer { sqlite3_close(h) }
         var version = 0
         var st: OpaquePointer?
@@ -2655,9 +2679,17 @@ enum ChatLimits {
             guard let orgs = try await get("/api/organizations", cookie) as? [[String: Any]], !orgs.isEmpty else {
                 return Snapshot(error: "No organization")
             }
-            let org = orgs.first { ($0["capabilities"] as? [String])?.contains("chat") == true } ?? orgs[0]
-            guard let uuid = org["uuid"] as? String else { return Snapshot(error: "No organization") }
-            return parse(try await get("/api/organizations/\(uuid)/usage", cookie))
+            // Loveploy: an account can belong to several organizations (personal and a team); use
+            // the first one that actually reports limits.
+            let chat = orgs.filter { ($0["capabilities"] as? [String])?.contains("chat") == true }
+            var first: Snapshot?
+            for org in (chat.isEmpty ? orgs : chat) {
+                guard let uuid = org["uuid"] as? String,
+                      let snapshot = try? parse(await get("/api/organizations/\(uuid)/usage", cookie)) else { continue }
+                if snapshot.week != nil || snapshot.fiveHour != nil { return snapshot }
+                first = first ?? snapshot
+            }
+            return first ?? Snapshot(error: "No limits")
         } catch {
             let code = (error as NSError).code
             Log.write("chat limits: claude.ai answered \(code)")

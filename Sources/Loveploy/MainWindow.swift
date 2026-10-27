@@ -35,30 +35,22 @@ struct CompactSections: View {
         weekLine
     }
 
+    /// Every account's week at once, one line each.
     private var weekLine: some View {
-        let tight = WeeklyLimit.tightest()
-        return VStack(alignment: .leading, spacing: 4) {
-            if let tight {
-                let left = WeeklyLimit.left(tight.limit)
+        VStack(alignment: .leading, spacing: 5) {
+            if engine.isOn(.chatLimits) {
+                let accounts = engine.profiles.filter { usage.limits[$0.id.uuidString] != nil }
+                if accounts.isEmpty {
+                    Text("Consultando claude.ai…").font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+                ForEach(accounts) { profile in
+                    AccountWeekLine(profile: profile, snapshot: usage.limits[profile.id.uuidString]!)
+                }
+            } else {
                 HStack {
                     Text("Semana").font(.system(size: 13))
                     Spacer()
-                    Text("Queda \(left)% · \(tight.profile.name)").font(.system(size: 12, weight: .semibold)).monospacedDigit()
-                        .foregroundStyle(left <= 15 ? Color.red : Color.primary)
-                }
-                GeometryReader { proxy in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(Color.primary.opacity(0.12))
-                        Capsule().fill(left <= 15 ? Color.red : tight.profile.tint)
-                            .frame(width: max(3, proxy.size.width * CGFloat(left) / 100))
-                    }
-                }
-                .frame(height: 5)
-            } else if !engine.isOn(.chatLimits) {
-                HStack {
-                    Text("Semana").font(.system(size: 13))
-                    Spacer()
-                    Text("Mostrar…").font(.system(size: 12)).foregroundStyle(.secondary)
+                    Text("Mostrar lo que queda de cada cuenta…").font(.system(size: 12)).foregroundStyle(.secondary)
                 }
             }
             Text("Desarrollo hoy \(DevHours.format(minutes: clock.hours.minutes(on: Date()))) · semana \(DevHours.format(minutes: clock.hours.minutesThisWeek()))")
@@ -69,9 +61,51 @@ struct CompactSections: View {
         .contentShape(Rectangle())
         .modifier(HoverBackground(radius: 8))
         .onTapGesture {
-            if !engine.isOn(.chatLimits) { engine.toggle(.chatLimits) } else { MainWindow.show(.projects) }
+            if !engine.isOn(.chatLimits) { engine.toggle(.chatLimits) } else { MainWindow.show(.usage) }
         }
-        .help("Consumo, horas y proyectos")
+        .help("Lo que queda de la semana en cada cuenta; clic para el consumo detallado")
+    }
+}
+
+/// "● BLENDER ▓▓▓▓░░ 35% · 1 d 6 h" — one account's week in a single line.
+struct AccountWeekLine: View {
+    let profile: Profile
+    let snapshot: ChatLimits.Snapshot
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle().fill(profile.tint).frame(width: 7, height: 7)
+            Text(profile.name).font(.system(size: 12)).lineLimit(1).frame(width: 78, alignment: .leading)
+            if let week = snapshot.week {
+                let left = WeeklyLimit.left(week)
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Color.primary.opacity(0.12))
+                        Capsule().fill(left <= 15 ? Color.red : profile.tint)
+                            .frame(width: max(2, proxy.size.width * CGFloat(left) / 100))
+                    }
+                }
+                .frame(height: 5)
+                Text("\(left)%").font(.system(size: 12, weight: .semibold)).monospacedDigit()
+                    .foregroundStyle(left <= 15 ? Color.red : Color.primary)
+                    .frame(width: 34, alignment: .trailing)
+                Text(WeeklyLimit.resets(week.resetsAt).map { $0.replacingOccurrences(of: "en ", with: "") } ?? "")
+                    .font(.system(size: 10)).foregroundStyle(.secondary).monospacedDigit()
+                    .frame(width: 54, alignment: .trailing)
+            } else {
+                Text(WeeklyLimit.explain(snapshot.error)).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                Spacer()
+            }
+        }
+        .help(help)
+    }
+
+    private var help: String {
+        guard let week = snapshot.week else { return WeeklyLimit.explain(snapshot.error) }
+        var text = "\(profile.name): queda \(WeeklyLimit.left(week))% de la semana"
+        if let resets = WeeklyLimit.resets(week.resetsAt) { text += ", se renueva \(resets)" }
+        if let five = snapshot.fiveHour { text += ". Límite de 5 h: \(Int(five.percent.rounded()))% usado" }
+        return text
     }
 }
 

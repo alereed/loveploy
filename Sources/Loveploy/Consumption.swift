@@ -148,6 +148,19 @@ enum WeeklyLimit {
         max(0, 100 - Int(limit.percent.rounded()))
     }
 
+    /// Why an account shows no limits, in plain words.
+    static func explain(_ error: String?) -> String {
+        switch error {
+        case nil: return "Sin datos todavía"
+        case "Not signed in": return "Abre Claude con esta cuenta e inicia sesión"
+        case "Keychain access refused": return "Permite el acceso a «Claude Safe Storage» en el Llavero"
+        case "No organization", "No limits": return "claude.ai no reporta límites para esta cuenta"
+        case let text? where text.hasPrefix("claude.ai refused"): return "La sesión venció: abre Claude con esta cuenta"
+        case "Couldn't reach claude.ai": return "Sin conexión con claude.ai"
+        case let text?: return text
+        }
+    }
+
     /// "en 2 d 4 h", "en 3 h 10 min".
     static func resets(_ date: Date?) -> String? {
         guard let date else { return nil }
@@ -158,35 +171,43 @@ enum WeeklyLimit {
         return "en \(minutes) min"
     }
 
-    /// The menu bar icon followed by a small battery of the week that's left and its percentage.
+    /// The menu bar icon followed by one thin bar per account (what's left of each week) and
+    /// the lowest percentage.
     static func decorate(_ icon: NSImage?) -> NSImage? {
-        guard showInMenuBar, let icon, let limit = tightest()?.limit else { return icon }
-        let left = left(limit)
-        let low = left <= 15
+        guard showInMenuBar, let icon else { return icon }
+        let accounts = Engine.shared.profiles.compactMap { profile -> (Profile, Int)? in
+            Usage.shared.limits[profile.id.uuidString]?.week.map { (profile, left($0)) }
+        }
+        guard let lowest = accounts.map(\.1).min() else { return icon }
+        let shown = Array(accounts.prefix(4))
+        let low = lowest <= 15
         let template = icon.isTemplate && !low
-        let text = NSAttributedString(string: "\(left)%", attributes: [
+        let ink: NSColor = template ? .black : .labelColor
+        let text = NSAttributedString(string: "\(lowest)%", attributes: [
             .font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .semibold),
             .foregroundColor: template ? NSColor.black : (low ? NSColor.systemRed : NSColor.labelColor),
         ])
-        let bar = NSSize(width: 22, height: 8)
+        let barWidth: CGFloat = 20, barHeight: CGFloat = shown.count > 2 ? 2.5 : 3.5, spacing: CGFloat = 1.5
+        let stack = CGFloat(shown.count) * barHeight + CGFloat(shown.count - 1) * spacing
         let gap: CGFloat = 4
-        let size = NSSize(width: icon.size.width + gap + bar.width + 3 + text.size().width, height: max(icon.size.height, 14))
+        let size = NSSize(width: icon.size.width + gap + barWidth + 3 + text.size().width, height: max(icon.size.height, 14))
         let image = NSImage(size: size, flipped: false) { _ in
             icon.draw(in: NSRect(x: 0, y: (size.height - icon.size.height) / 2, width: icon.size.width, height: icon.size.height))
-            let color: NSColor = template ? .black : (low ? .systemRed : .labelColor)
-            let frame = NSRect(x: icon.size.width + gap, y: (size.height - bar.height) / 2, width: bar.width, height: bar.height)
-            color.withAlphaComponent(0.35).setStroke()
-            let outline = NSBezierPath(roundedRect: frame.insetBy(dx: 0.5, dy: 0.5), xRadius: 2.5, yRadius: 2.5)
-            outline.lineWidth = 1
-            outline.stroke()
-            color.setFill()
-            let fill = NSRect(x: frame.minX + 1.5, y: frame.minY + 1.5, width: max(1, (frame.width - 3) * CGFloat(left) / 100), height: frame.height - 3)
-            NSBezierPath(roundedRect: fill, xRadius: 1.5, yRadius: 1.5).fill()
-            text.draw(at: NSPoint(x: frame.maxX + 3, y: (size.height - text.size().height) / 2))
+            var y = (size.height + stack) / 2 - barHeight
+            for (profile, left) in shown {
+                let track = NSRect(x: icon.size.width + gap, y: y, width: barWidth, height: barHeight)
+                ink.withAlphaComponent(0.25).setFill()
+                NSBezierPath(roundedRect: track, xRadius: barHeight / 2, yRadius: barHeight / 2).fill()
+                (template ? ink : (left <= 15 ? .systemRed : profile.nsTint)).setFill()
+                let fill = NSRect(x: track.minX, y: y, width: max(1, barWidth * CGFloat(left) / 100), height: barHeight)
+                NSBezierPath(roundedRect: fill, xRadius: barHeight / 2, yRadius: barHeight / 2).fill()
+                y -= barHeight + spacing
+            }
+            text.draw(at: NSPoint(x: icon.size.width + gap + barWidth + 3, y: (size.height - text.size().height) / 2))
             return true
         }
         image.isTemplate = template
-        image.accessibilityDescription = "Blender Play, queda \(left)% del límite semanal"
+        image.accessibilityDescription = "Blender Play. " + accounts.map { "\($0.0.name): queda \($0.1)%" }.joined(separator: ", ")
         return image
     }
 }
@@ -275,8 +296,8 @@ struct WeekRow: View {
                         .foregroundStyle(WeeklyLimit.left(week) <= 15 ? Color.red : Color.primary)
                 }
             }
-            if let error = snapshot.error {
-                Text(error).font(.system(size: 11)).foregroundStyle(.secondary)
+            if snapshot.error != nil {
+                Text(WeeklyLimit.explain(snapshot.error)).font(.system(size: 11)).foregroundStyle(.secondary)
             }
             if let week = snapshot.week {
                 GeometryReader { proxy in
