@@ -206,7 +206,11 @@ final class Dictation: ObservableObject {
               }
               if (!el) return false;
               el.focus();
-              if (!document.execCommand('insertText', false, t)) {
+              var read = function () { return 'value' in el ? el.value : el.textContent; };
+              var before = read();
+              document.execCommand('insertText', false, t);
+              // Some editors take the text but report failure: only add it if it isn't there.
+              if (read() === before) {
                 if ('value' in el) { el.value += t; el.dispatchEvent(new Event('input', { bubbles: true })); }
                 else { el.textContent += t; el.dispatchEvent(new InputEvent('input', { bubbles: true })); }
               }
@@ -231,6 +235,46 @@ final class Dictation: ObservableObject {
         }
         guard speech else { return false }
         return await AVCaptureDevice.requestAccess(for: .audio)
+    }
+}
+
+/// claude.ai's own dictation button relies on Chrome's speech service, which a web pane doesn't
+/// have, so it fails. This takes over that button in web panes: a click runs the Mac's
+/// dictation (the same as the header's microphone) instead. Voice mode is left alone.
+final class ClaudeMicBridge: NSObject, WKScriptMessageHandler {
+    static let name = "blenderPlayDictate"
+    static let script = """
+    (function () {
+      var dictation = /dictat|dictar|dictado|micr[oó]fono|microphone|speech|voz a texto|speak/i;
+      var voiceMode = /voice mode|modo de voz|conversaci/i;
+      addEventListener('click', function (e) {
+        var b = e.target.closest && e.target.closest('button');
+        if (!b) return;
+        var label = (b.getAttribute('aria-label') || '') + ' ' + (b.title || '') + ' ' + (b.getAttribute('data-testid') || '');
+        if (!dictation.test(label) || voiceMode.test(label)) return;
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        try { window.webkit.messageHandlers.\(ClaudeMicBridge.name).postMessage(1); } catch (err) {}
+      }, true);
+    })();
+    """
+
+    let pane: UUID
+    weak var web: WKWebView?
+
+    init(pane: UUID) { self.pane = pane }
+
+    func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
+        let pane = pane
+        let web = web
+        MainActor.assumeIsolated { Dictation.shared.toggle(pane: pane, view: web) }
+    }
+
+    static func install(in configuration: WKWebViewConfiguration, pane: UUID) -> ClaudeMicBridge {
+        let bridge = ClaudeMicBridge(pane: pane)
+        configuration.userContentController.add(bridge, name: name)
+        configuration.userContentController.addUserScript(WKUserScript(source: script, injectionTime: .atDocumentEnd, forMainFrameOnly: true))
+        return bridge
     }
 }
 

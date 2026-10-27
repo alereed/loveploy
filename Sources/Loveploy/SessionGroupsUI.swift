@@ -149,6 +149,7 @@ final class SessionGroups: ObservableObject {
         updateActivationPolicy()
         NSApp.activate()
         controller.showWindow(nil)
+        controller.enterFullScreenIfWanted()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { controller.equalize() }
     }
 
@@ -254,6 +255,7 @@ final class GroupWindowController: NSWindowController, NSWindowDelegate {
         window.title = SessionGroups.shared.group(groupID)?.name ?? "Grupo"
         window.isReleasedWhenClosed = false
         window.tabbingMode = .disallowed
+        window.collectionBehavior.insert(.fullScreenPrimary)
         window.minSize = NSSize(width: 640, height: 400)
         super.init(window: window)
         window.delegate = self
@@ -321,7 +323,24 @@ final class GroupWindowController: NSWindowController, NSWindowDelegate {
         hosts.sweep(group, window: window, awaySince: window?.isKeyWindow == true ? nil : (awaySince ?? Date()), force: force)
     }
 
-    func windowDidResignKey(_ notification: Notification) { awaySince = Date() }
+    // MARK: Full screen
+
+    /// Groups open full screen (their own Space), unless they hold Chrome windows, which
+    /// can't share a full screen Space: those fill the screen instead.
+    func enterFullScreenIfWanted() {
+        guard let window, UserDefaults.standard.object(forKey: "loveploy.groupsFullScreen") as? Bool ?? true else { return }
+        let hasChrome = SessionGroups.shared.group(groupID)?.panes.contains { $0.kind == .chrome } ?? false
+        if hasChrome {
+            if let screen = window.screen ?? NSScreen.main { window.setFrame(screen.visibleFrame, display: true, animate: false) }
+        } else if !window.styleMask.contains(.fullScreen) {
+            DispatchQueue.main.async { window.toggleFullScreen(nil) }
+        }
+    }
+
+    func windowDidEnterFullScreen(_ notification: Notification) { equalize() }
+    func windowDidExitFullScreen(_ notification: Notification) { equalize() }
+
+        func windowDidResignKey(_ notification: Notification) { awaySince = Date() }
 
     func windowDidBecomeKey(_ notification: Notification) {
         awaySince = nil
@@ -502,8 +521,10 @@ final class PaneHosts: ObservableObject {
         }
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         PaneActivity.install(in: configuration, pane: pane.id)
+        let mic = ClaudeMicBridge.install(in: configuration, pane: pane.id)
         PaneUse.touch(pane.id)
         let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 420), configuration: configuration)
+        mic.web = web
         web.customUserAgent = LovableWeb.userAgent
         web.allowsBackForwardNavigationGestures = true
         let popups = WebPopups()

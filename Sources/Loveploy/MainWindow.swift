@@ -331,8 +331,14 @@ struct GroupManagerRow: View {
 struct MemorySaverSettings: View {
     @AppStorage("loveploy.sleepWebMinutes") private var webMinutes = 10
     @AppStorage("loveploy.sleepTerminalMinutes") private var terminalMinutes = 30
+    @AppStorage("loveploy.groupsFullScreen") private var fullScreen = true
 
     var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+        Toggle("Abrir los grupos en pantalla completa", isOn: $fullScreen)
+            .toggleStyle(.checkbox)
+            .font(.system(size: 12))
+            .help("Cada grupo en su propio espacio, a toda la pantalla. Los grupos con ventanas de Chrome llenan la pantalla sin pasar a pantalla completa.")
         HStack(spacing: 14) {
             Label("Ahorro de memoria", systemImage: "moon.zzz").font(.system(size: 13, weight: .semibold))
             Picker("Paneles web", selection: $webMinutes) {
@@ -348,6 +354,7 @@ struct MemorySaverSettings: View {
             Spacer()
         }
         .font(.system(size: 12))
+        }
         .help("Los paneles web se pausan cuando llevas ese tiempo fuera de su ventana y sin usarlos; vuelven al regresar a la ventana. Las terminales se pausan cuando Claude Code lleva ese tiempo sin escribir ni recibir nada, y se reanudan con un clic. El panel en el que estás escribiendo nunca se pausa.")
     }
 }
