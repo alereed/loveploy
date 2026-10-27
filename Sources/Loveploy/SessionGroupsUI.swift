@@ -21,6 +21,14 @@ final class SessionGroups: ObservableObject {
 
     private init() {
         groups = store.load()
+        // After the Mac sleeps, claude.ai pages show stale state until reloaded.
+        NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+                MainActor.assumeIsolated {
+                    for controller in SessionGroups.shared.windows.values { controller.hosts.reloadWeb() }
+                }
+            }
+        }
     }
 
     func group(_ id: UUID) -> SessionGroup? { groups.first { $0.id == id } }
@@ -265,6 +273,7 @@ final class GroupWindowController: NSWindowController, NSWindowDelegate {
         if !window.setFrameUsingName(name) { window.center() }
         window.setFrameAutosaveName(name)
         startSweeping()
+        watchClicks()
     }
 
     @available(*, unavailable)
@@ -343,8 +352,26 @@ final class GroupWindowController: NSWindowController, NSWindowDelegate {
         func windowDidResignKey(_ notification: Notification) { awaySince = Date() }
 
     func windowDidBecomeKey(_ notification: Notification) {
+        // Pages left in the background a long time can stop updating; refresh the quiet ones.
+        if let away = awaySince, Date().timeIntervalSince(away) > 15 * 60 { hosts.reloadQuietWeb(olderThan: away) }
         awaySince = nil
-        if let group = SessionGroups.shared.group(groupID) { hosts.wakeWeb(group) }
+        wakeAll()
+    }
+
+    func wakeAll() {
+        if let group = SessionGroups.shared.group(groupID) { hosts.wakeAll(group) }
+    }
+
+    /// One click anywhere in the window brings back every paused pane of the group.
+    private var clickMonitor: Any?
+
+    func watchClicks() {
+        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            MainActor.assumeIsolated {
+                if let self, event.window === self.window, !self.hosts.sleeping.isEmpty { self.wakeAll() }
+            }
+            return event
+        }
     }
 
     // Chrome panes follow the window when it moves or changes size.
@@ -370,6 +397,8 @@ final class GroupWindowController: NSWindowController, NSWindowDelegate {
     func windowWillClose(_ notification: Notification) {
         sweeper?.invalidate()
         sweeper = nil
+        if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
+        clickMonitor = nil
         hosts.terminateAll()
         SessionGroups.shared.windowClosed(groupID)
     }
@@ -449,10 +478,26 @@ final class PaneHosts: ObservableObject {
         objectWillChange.send()
     }
 
-    /// Web panes come back as soon as you return to their window; terminals on a click
-    /// (resuming a Claude Code session takes a few seconds).
-    func wakeWeb(_ group: SessionGroup) {
-        for pane in group.panes where pane.kind == .cloud && sleeping.contains(pane.id) { wake(pane.id) }
+    /// Everything paused in the group comes back at once (a click in its window, or returning
+    /// to it): web pages and Claude Code terminals alike.
+    func wakeAll(_ group: SessionGroup) {
+        for pane in group.panes where sleeping.contains(pane.id) { wake(pane.id) }
+    }
+
+    /// Reloads the web panes that showed no activity since `date` (the ones you were using
+    /// keep what you typed).
+    func reloadQuietWeb(olderThan date: Date) {
+        for (id, view) in views {
+            guard let web = view as? WKWebView, (PaneUse.last[id] ?? .distantPast) < date else { continue }
+            web.reload()
+        }
+    }
+
+    /// claude.ai pages lose their live connection while the Mac sleeps; reload them.
+    func reloadWeb() {
+        for view in views.values {
+            (view as? WKWebView)?.reload()
+        }
     }
 
     /// Puts to sleep what hasn't been used: web panes of a window you left more than N
