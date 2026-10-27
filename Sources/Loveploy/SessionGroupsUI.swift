@@ -397,6 +397,9 @@ final class PaneHosts: ObservableObject {
 
     func resume() { objectWillChange.send() }
 
+    /// The pane's terminal or web view, if it's loaded.
+    func existingView(_ id: UUID) -> NSView? { views[id] }
+
     // MARK: Memory saver
 
     func sleep(_ id: UUID) {
@@ -605,7 +608,12 @@ final class WebPopups: NSObject, WKUIDelegate, WKNavigationDelegate, WKDownloadD
         return popup
     }
 
-    func webViewDidClose(_ webView: WKWebView) {
+    /// claude.ai's microphone (voice mode and dictation) works like in a browser.
+    func webView(_ webView: WKWebView, requestMediaCapturePermissionFor origin: WKSecurityOrigin, initiatedByFrame frame: WKFrameInfo, type: WKMediaCaptureType) async -> WKPermissionDecision {
+        origin.host == "claude.ai" || origin.host.hasSuffix(".claude.ai") ? .grant : .prompt
+    }
+
+        func webViewDidClose(_ webView: WKWebView) {
         if let window = windows.first(where: { $0.contentView === webView }) {
             window.close()
             windows.removeAll { $0 === window }
@@ -902,7 +910,10 @@ struct PaneCell: View {
                 if pane.kind == .chrome { Task { await ChromePlacer.shared.arrange(groupID) } } else { hosts.reload(pane) }
             } label: { Image(systemName: "arrow.clockwise") }
                 .help(pane.kind == .local ? "Reiniciar la sesión" : pane.kind == .chrome ? "Acomodar Chrome" : "Recargar")
-            Button { openOutside() } label: { Image(systemName: "arrow.up.forward.app") }
+            if pane.kind != .chrome && !hosts.sleeping.contains(pane.id) {
+                DictationButton(pane: pane, hosts: hosts)
+            }
+                        Button { openOutside() } label: { Image(systemName: "arrow.up.forward.app") }
                 .help(pane.kind == .local ? "Abrir en Terminal" : "Abrir en el navegador")
             Button {
                 hosts.drop(pane.id)

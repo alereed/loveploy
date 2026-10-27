@@ -20,6 +20,8 @@ Un grupo es un escenario de trabajo: hasta **8 sesiones de Claude Code** que se 
 - **Tecla rápida por grupo**: en la ventana del grupo, **Tecla rápida** graba una combinación (por ejemplo ⌃⌥⌘1) que trae esa ventana al frente desde cualquier app, en la pantalla o el escritorio donde esté, para revisar tus chats al instante. En el panel, clic derecho en un grupo asigna la siguiente libre.
 - **De un botón**: en el panel de la barra, clic en un grupo lo abre tal como lo dejaste, y **Abrir todos** abre todos tus escenarios a la vez. Los marcados con **Abrir al iniciar** se abren solos al arrancar Loveploy.
 
+**Dictado**: el micrófono en la barra de cada panel graba tu voz, la transcribe en la Mac (en español, en el equipo cuando se puede) y escribe el texto donde estabas escribiendo, en claude.ai o en la terminal de Claude Code. El micrófono de claude.ai (modo de voz) también funciona dentro de los paneles web. macOS pide permiso de micrófono y de reconocimiento de voz la primera vez.
+
 Los paneles web descargan archivos a tu carpeta Descargas y te dejan adjuntar archivos. ⌘C, ⌘V, ⌘X, ⌘A y ⌘Z funcionan en las terminales y en los campos de texto.
 
 Mientras hay una ventana de grupo abierta, Loveploy aparece en el Dock y en ⌘-Tab como cualquier app. Al cerrar un grupo con sesiones locales, Loveploy avisa: las sesiones quedan guardadas y se reanudan al volver a abrirlo.
