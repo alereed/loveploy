@@ -17,7 +17,7 @@ enum ChromeError: Error, LocalizedError {
         switch self {
         case .notRunning: return "Chrome no está abierto."
         case .notAllowed:
-            return "Loveploy no tiene permiso para controlar Chrome. Actívalo en Ajustes del Sistema → Privacidad y seguridad → Automatización → Loveploy → Google Chrome."
+            return "Blender Play no tiene permiso para controlar Chrome. Actívalo en Ajustes del Sistema → Privacidad y seguridad → Automatización → Blender Play → Google Chrome."
         case .javaScriptOff:
             return "Para leer la lista de sesiones desde Chrome, en Chrome activa Ver → Desarrollador → Permitir JavaScript desde eventos de Apple."
         case let .failed(message): return message

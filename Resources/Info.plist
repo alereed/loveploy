@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Loveploy</string>
+    <string>Blender Play</string>
     <key>CFBundleDisplayName</key>
-    <string>Loveploy</string>
+    <string>Blender Play</string>
     <key>CFBundleIdentifier</key>
     <string>mx.blender.loveploy</string>
     <key>CFBundleExecutable</key>
@@ -46,11 +46,11 @@
         </dict>
     </array>
     <key>NSMicrophoneUsageDescription</key>
-    <string>Loveploy usa el micrófono para dictar en tus sesiones de Claude y para el modo de voz de claude.ai.</string>
+    <string>Blender Play usa el micrófono para dictar en tus sesiones de Claude y para el modo de voz de claude.ai.</string>
     <key>NSSpeechRecognitionUsageDescription</key>
-    <string>Loveploy convierte en texto lo que dictas para escribirlo en tus sesiones de Claude.</string>
+    <string>Blender Play convierte en texto lo que dictas para escribirlo en tus sesiones de Claude.</string>
     <key>NSAppleEventsUsageDescription</key>
-    <string>Loveploy pasa el enlace de inicio de sesión de Claude a la ventana de la cuenta que lo pidió.</string>
+    <string>Blender Play pasa el enlace de inicio de sesión de Claude a la ventana de la cuenta que lo pidió.</string>
     <key>NSHumanReadableCopyright</key>
     <string>© 2026 Blender.mx · Alejandro Reed. Incluye MultiClaude © 2026 Soma Labs (Apache 2.0).</string>
 </dict>

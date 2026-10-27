@@ -24,17 +24,33 @@ final class Dictation: ObservableObject {
     private var task: SFSpeechRecognitionTask?
     private weak var target: NSView?
     private var finishing = false
+    /// Press Enter (send the message) after typing the text.
+    private var send = false
 
-    func toggle(pane: UUID, view: NSView?) {
+    /// Dictation into whatever app is in front (the macro pad's knob, ⌃⌥⌘D).
+    static let anywhere = UUID()
+
+    func toggle(pane: UUID, view: NSView?, send: Bool = false) {
         if self.pane == pane { stop(); return }
         if self.pane != nil { cancel() }
-        guard let view else { return }
-        Task { await start(pane: pane, view: view) }
+        guard view != nil || pane == Self.anywhere else { return }
+        Task { await start(pane: pane, view: view, send: send) }
     }
 
-    private func start(pane: UUID, view: NSView) async {
+    /// ⌃⌥⌘D: the first press starts listening, the second types the text and sends it. Into the
+    /// group pane you're typing in, or into whatever app is in front.
+    func hotKey() {
+        if pane != nil { stop(); return }
+        if let found = SessionGroups.shared.focusedPane() {
+            toggle(pane: found.0, view: found.1, send: true)
+        } else {
+            toggle(pane: Self.anywhere, view: nil, send: true)
+        }
+    }
+
+    private func start(pane: UUID, view: NSView?, send: Bool) async {
         guard await Self.allowed() else {
-            Self.tell("Permite el micrófono y el reconocimiento de voz a Loveploy en Ajustes del Sistema → Privacidad y seguridad.")
+            Self.tell("Permite el micrófono y el reconocimiento de voz a Blender Play en Ajustes del Sistema → Privacidad y seguridad.")
             return
         }
         let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "es-MX")) ?? SFSpeechRecognizer()
@@ -65,6 +81,7 @@ final class Dictation: ObservableObject {
         self.request = request
         self.target = view
         self.pane = pane
+        self.send = send
         heard = ""
         finishing = false
         task = recognizer.recognitionTask(with: request) { result, error in
@@ -101,7 +118,14 @@ final class Dictation: ObservableObject {
     private func deliver() {
         guard pane != nil else { return }
         let text = heard.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !text.isEmpty, let target { Self.insert(text, into: target) }
+        if !text.isEmpty {
+            if let target {
+                Self.insert(text, into: target)
+                if send { Self.submit(target) }
+            } else if pane == Self.anywhere {
+                Self.paste(text, pressReturn: send)
+            }
+        }
         task?.cancel()
         reset()
     }
@@ -114,6 +138,55 @@ final class Dictation: ObservableObject {
         pane = nil
         heard = ""
         finishing = false
+        send = false
+    }
+
+    /// Sends the message: Enter in the terminal, the send button on claude.ai.
+    static func submit(_ view: NSView) {
+        if let terminal = view as? TerminalView {
+            terminal.send(txt: "\r")
+        } else if let web = view as? WKWebView {
+            web.evaluateJavaScript("""
+            (function () {
+              var b = document.querySelector('button[aria-label*="Send" i], button[aria-label*="Enviar" i], button[type="submit"]');
+              if (b && !b.disabled) { b.click(); return true; }
+              var el = document.activeElement;
+              if (el) ['keydown', 'keypress', 'keyup'].forEach(function (t) {
+                el.dispatchEvent(new KeyboardEvent(t, { key: 'Enter', code: 'Enter', keyCode: 13, which: 13, bubbles: true }));
+              });
+              return false;
+            })()
+            """)
+        }
+    }
+
+    /// Into another app: through the clipboard and ⌘V (then Return), which needs Accessibility.
+    /// The clipboard gets its text back afterwards.
+    static func paste(_ text: String, pressReturn: Bool) {
+        guard AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary) else {
+            tell("Para escribir lo dictado en otras apps, activa Blender Play en Ajustes del Sistema → Privacidad y seguridad → Accesibilidad.")
+            return
+        }
+        let board = NSPasteboard.general
+        let saved = board.string(forType: .string)
+        board.clearContents()
+        board.setString(text, forType: .string)
+        func key(_ code: CGKeyCode, _ flags: CGEventFlags = []) {
+            let source = CGEventSource(stateID: .combinedSessionState)
+            for down in [true, false] {
+                let event = CGEvent(keyboardEventSource: source, virtualKey: code, keyDown: down)
+                event?.flags = flags
+                event?.post(tap: .cghidEventTap)
+            }
+        }
+        key(9, .maskCommand)   // V
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            if pressReturn { key(36) }   // Return
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                board.clearContents()
+                if let saved { board.setString(saved, forType: .string) }
+            }
+        }
     }
 
     /// Types the text where the pane's cursor is (claude.ai's message box, or the terminal).

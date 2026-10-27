@@ -61,6 +61,21 @@ final class SessionGroups: ObservableObject {
         save()
     }
 
+    /// The pane you're typing in, in the group window in front.
+    func focusedPane() -> (UUID, NSView)? {
+        for controller in windows.values {
+            guard let window = controller.window, window.isKeyWindow,
+                  let responder = window.firstResponder as? NSView,
+                  let group = group(controller.groupID) else { continue }
+            for pane in group.panes {
+                if let view = controller.hosts.existingView(pane.id), responder === view || responder.isDescendant(of: view) {
+                    return (pane.id, view)
+                }
+            }
+        }
+        return nil
+    }
+
     /// Pauses every pane of the group you're not using right now.
     func freeMemory(_ id: UUID) { windows[id]?.sweep(force: true) }
 
@@ -1009,7 +1024,7 @@ struct ChromeTabsList: View {
             }
             Divider()
             HStack {
-                Text("«Dentro de Loveploy» usa la cuenta:").font(.caption)
+                Text("«Dentro de Blender Play» usa la cuenta:").font(.caption)
                 Picker("", selection: $account) {
                     ForEach(engine.profiles) { Text($0.name).tag(Optional($0.id.uuidString)) }
                 }
@@ -1039,8 +1054,8 @@ struct ChromeTabsList: View {
                 Text("En el grupo").font(.caption).foregroundStyle(.secondary)
             } else {
                 Button("Ventana de Chrome") { add(url, title, .chrome) }
-                    .help("Usa tu Chrome con tu sesión: Loveploy acomoda esa ventana sobre su panel")
-                Button("Dentro de Loveploy") { add(url, title, .cloud) }
+                    .help("Usa tu Chrome con tu sesión: Blender Play acomoda esa ventana sobre su panel")
+                Button("Dentro de Blender Play") { add(url, title, .cloud) }
                     .help("Un panel web dentro de la ventana del grupo, con la cuenta elegida abajo")
             }
         }
@@ -1106,7 +1121,7 @@ struct CloudSessionsList: View {
                 ProgressView("Leyendo claude.ai/code…").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if found.isEmpty {
                 VStack(spacing: 8) {
-                    Text(loaded ? "No encontré sesiones. Si esta cuenta no ha iniciado sesión en claude.ai dentro de Loveploy, ábrela una vez:" : "")
+                    Text(loaded ? "No encontré sesiones. Si esta cuenta no ha iniciado sesión en claude.ai dentro de Blender Play, ábrela una vez:" : "")
                         .multilineTextAlignment(.center).frame(maxWidth: 460)
                     if loaded {
                         Button("Iniciar sesión en claude.ai con esta cuenta") {
@@ -1130,7 +1145,7 @@ struct CloudSessionsList: View {
                             Text("En el grupo").font(.caption).foregroundStyle(.secondary)
                         } else {
                             Button("Ventana de Chrome") { add(item, .chrome) }
-                            Button("Dentro de Loveploy") { add(item, .cloud) }
+                            Button("Dentro de Blender Play") { add(item, .cloud) }
                         }
                     }
                     .disabled(group?.isFull ?? true)

@@ -67,7 +67,7 @@ struct LovableView: View {
         VStack(spacing: 12) {
             Image(systemName: "heart.circle").font(.system(size: 36)).foregroundStyle(.pink)
             Text("Inicia sesión en Lovable").font(.headline)
-            Text("Se abre lovable.dev para que entres como siempre (Google, GitHub o correo). Loveploy usa esa misma sesión para ver y publicar tus proyectos.")
+            Text("Se abre lovable.dev para que entres como siempre (Google, GitHub o correo). Blender Play usa esa misma sesión para ver y publicar tus proyectos.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
@@ -77,7 +77,7 @@ struct LovableView: View {
             Button("Iniciar sesión en Lovable") { model.signIn() }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
-            Button("Salir de Loveploy") { NSApp.terminate(nil) }
+            Button("Salir de Blender Play") { NSApp.terminate(nil) }
                 .buttonStyle(.borderless)
                 .font(.caption)
         }
@@ -165,7 +165,7 @@ struct LovableView: View {
                 Button("Seleccionar todos los visibles") { model.selectAllVisible(true) }
                 Button("Quitar todos los visibles") { model.selectAllVisible(false) }
                 Divider()
-                Button("Salir de Loveploy") { NSApp.terminate(nil) }
+                Button("Salir de Blender Play") { NSApp.terminate(nil) }
             } label: {
                 Image(systemName: "ellipsis.circle")
             }

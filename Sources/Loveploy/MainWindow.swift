@@ -160,7 +160,7 @@ enum MainWindow {
                 backing: .buffered,
                 defer: false
             )
-            w.title = "Loveploy"
+            w.title = "Blender Play"
             w.isReleasedWhenClosed = false
             w.contentView = NSHostingView(rootView: MainWindowView())
             w.setFrameAutosaveName("LoveployMainWindow")

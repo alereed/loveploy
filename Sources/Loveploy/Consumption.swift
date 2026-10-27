@@ -186,7 +186,7 @@ enum WeeklyLimit {
             return true
         }
         image.isTemplate = template
-        image.accessibilityDescription = "Loveploy, queda \(left)% del límite semanal"
+        image.accessibilityDescription = "Blender Play, queda \(left)% del límite semanal"
         return image
     }
 }

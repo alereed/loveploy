@@ -13,9 +13,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Test core
         run: swift test
-      - name: Build Loveploy.app
+      - name: Build Blender Play.app
         run: scripts/build-app.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: Loveploy
-          path: dist/Loveploy.zip
+          name: BlenderPlay
+          path: dist/BlenderPlay.zip

@@ -201,7 +201,7 @@ enum ProjectsWindow {
                 backing: .buffered,
                 defer: false
             )
-            w.title = "Proyectos y cobro · Loveploy"
+            w.title = "Proyectos y cobro · Blender Play"
             w.isReleasedWhenClosed = false
             w.contentView = NSHostingView(rootView: ProjectsView())
             w.setFrameAutosaveName("LoveployProjectsWindow")
@@ -333,7 +333,7 @@ struct ProjectsView: View {
     private func export(_ rows: [Row]) {
         let (_, _, name) = period.range()
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "Loveploy proyectos \(name).csv"
+        panel.nameFieldStringValue = "Blender Play proyectos \(name).csv"
         panel.allowedContentTypes = [.commaSeparatedText]
         guard panel.runModal() == .OK, let url = panel.url else { return }
         let csv = ProjectReport.csv(rows.map(\.totals), projects: projects.list, period: name)

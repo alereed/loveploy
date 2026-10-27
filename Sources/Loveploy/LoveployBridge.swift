@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import Combine
 import LoveployCore
 import SwiftUI
@@ -50,11 +51,11 @@ enum LoveployBridge {
     static func installMainMenu() {
         let main = NSMenu()
 
-        let app = NSMenu(title: "Loveploy")
-        app.addItem(withTitle: "Ocultar Loveploy", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
+        let app = NSMenu(title: "Blender Play")
+        app.addItem(withTitle: "Ocultar Blender Play", action: #selector(NSApplication.hide(_:)), keyEquivalent: "h")
         app.addItem(.separator())
-        app.addItem(withTitle: "Salir de Loveploy", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-        main.addItem(submenu: app, title: "Loveploy")
+        app.addItem(withTitle: "Salir de Blender Play", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        main.addItem(submenu: app, title: "Blender Play")
 
         let edit = NSMenu(title: "Edición")
         edit.addItem(withTitle: "Deshacer", action: Selector(("undo:")), keyEquivalent: "z")
@@ -83,13 +84,23 @@ enum LoveployBridge {
         NSApp.mainMenu = main
     }
 
-    /// Each group's shortcut brings its window forward, wherever it is.
+    /// Each group's shortcut brings its window forward, wherever it is; plus the fixed ones the
+    /// macro pad uses: ⌃⌥⌘P publishes what's pending on Lovable, ⌃⌥⌘D dictates (press again to
+    /// type and send), ⌃⌥⌘U opens today's usage.
     static func groupHotKeys() -> [HotKey.Binding] {
-        SessionGroups.shared.groups.compactMap { group in
+        let all = cmdKey | optionKey | controlKey
+        var keys = SessionGroups.shared.groups.compactMap { group -> HotKey.Binding? in
             guard let shortcut = group.shortcut, shortcut.isUsable else { return nil }
             let id = group.id
             return HotKey.Binding(key: shortcut.keyCode, mods: shortcut.modifiers) { SessionGroups.shared.open(id) }
         }
+        keys.append(.init(key: kVK_ANSI_P, mods: all) {
+            guard let model = LoveployBridge.model, model.isSignedIn, !model.isDeploying else { NSSound.beep(); return }
+            if model.selectedRows.isEmpty { NSSound.beep() } else { model.deploySelected() }
+        })
+        keys.append(.init(key: kVK_ANSI_D, mods: all) { Dictation.shared.hotKey() })
+        keys.append(.init(key: kVK_ANSI_U, mods: all) { MainWindow.show(.usage) })
+        return keys
     }
 
     /// " ♥3" after the menu bar icon while Lovable projects are out of date.
@@ -184,7 +195,7 @@ enum LovableWindow {
                 backing: .buffered,
                 defer: false
             )
-            w.title = "Lovable · Loveploy"
+            w.title = "Lovable · Blender Play"
             w.isReleasedWhenClosed = false
             w.contentView = NSHostingView(rootView: LovableView().environmentObject(model))
             w.setFrameAutosaveName("LoveployLovableWindow")

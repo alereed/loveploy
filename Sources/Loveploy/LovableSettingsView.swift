@@ -37,7 +37,7 @@ struct LovableSettingsView: View {
                     Button("Cerrar sesión", role: .destructive) { model.signOut() }
                         .buttonStyle(.borderless)
                 }
-                Text("Loveploy usa tu sesión de lovable.dev, como el navegador. No necesita API keys.")
+                Text("Blender Play usa tu sesión de lovable.dev, como el navegador. No necesita API keys.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             } else {

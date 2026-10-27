@@ -4387,9 +4387,9 @@ struct MenuView: View {
         VStack(alignment: .leading, spacing: 0) {
             // The switch reads "any profile running": on opens every profile, off quits them all.
             HStack {
-                Text("Loveploy").font(.system(size: 13, weight: .bold))   // Loveploy: the app's name
+                Text("Blender Play").font(.system(size: 13, weight: .bold))   // Loveploy: the app's name
                     .onTapGesture { if !inWindow { MainWindow.show() } }
-                    .help("Abrir la ventana de Loveploy")
+                    .help("Abrir la ventana de Blender Play")
                 Spacer()
                 // Keep-awake on or off at a glance; durations and options are in the section below.
                 Chip(selected: awake.active, action: { awake.toggleActive() }) {
@@ -4482,11 +4482,11 @@ struct MenuView: View {
             Divider().padding(.horizontal, 14)
             VStack(spacing: 0) {
                 if !inWindow {
-                    PlainRow(title: compact ? "Abrir Loveploy…" : "Abrir la ventana de Loveploy…") { MainWindow.show() }
+                    PlainRow(title: compact ? "Abrir Blender Play…" : "Abrir la ventana de Blender Play…") { MainWindow.show() }
                 }
                 Toggle("Panel corto", isOn: $compactPanel)
                     .toggleStyle(.checkbox).font(.system(size: 12)).padding(.horizontal, 8).padding(.vertical, 3)
-                    .help("Solo lo de uso diario aquí; todo lo demás en la ventana de Loveploy")
+                    .help("Solo lo de uso diario aquí; todo lo demás en la ventana de Blender Play")
                     .opacity(inWindow ? 1 : 0.7)
                 PlainRow(title: "About") { PanelController.shared.close(); AboutWindow.show() }
                 PlainRow(title: "Quit") { NSApp.terminate(nil) }
@@ -4660,7 +4660,7 @@ struct AboutView: View {
         HStack(spacing: 34) {
             Image(nsImage: AppIcon.image(512)).resizable().frame(width: 170, height: 170)
             VStack(alignment: .leading, spacing: 4) {
-                Text("Loveploy").font(.system(size: 32, weight: .semibold))   // Loveploy
+                Text("Blender Play").font(.system(size: 32, weight: .semibold))   // Loveploy
                 Text("Version \(appVersion)").font(.system(size: 13))
                 // Loveploy: credit MultiClaude, which this app is built on.
                 Text("Hecho por Blender.mx · Alejandro Reed.").font(.system(size: 14, weight: .semibold)).padding(.top, 14)
