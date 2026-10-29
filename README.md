@@ -29,6 +29,23 @@ Los paneles web descargan archivos a tu carpeta Descargas y te dejan adjuntar ar
 
 Mientras hay una ventana de grupo abierta, Blender Play aparece en el Dock y en ⌘-Tab como cualquier app. Al cerrar un grupo con sesiones locales, Blender Play avisa: las sesiones quedan guardadas y se reanudan al volver a abrirlo.
 
+## 📨 Mensajes en cola
+
+Cada panel tiene una **cola de mensajes** (botón de la lista en su barra): escribes lo que Claude debe hacer después y cada mensaje sale cuando Claude termina el anterior. Puedes reordenar, editar, borrar, mandar el siguiente ya, vaciarla o poner una **pausa** en medio: la cola se detiene ahí hasta que le das «Continuar».
+
+- **Terminal de Claude Code**: Claude Code avisa a Blender Play con *hooks* (Stop, Notification, UserPromptSubmit) que se le pasan al abrir la sesión. Si Claude pide permiso o te pregunta algo, la cola se pausa y te avisa: nunca escribe encima de una pregunta.
+- **claude.ai**: la cola espera mientras está el botón «Detener», y se detiene si aparece un límite de uso, un error o la página pierde la conexión.
+- La cola se guarda y sigue al volver a abrir Blender Play; un panel con mensajes pendientes no se pausa por ahorro de memoria. La ventana del grupo tiene que estar abierta para que avance.
+- **⌃⌥⌘Q** manda a la cola lo que estás dictando o lo que tienes escrito en claude.ai, en vez de enviarlo.
+
+## 👁 Vista web
+
+En **Agregar sesión → Vista web** pones cualquier sitio, tu versión publicada o un servidor local (`localhost:5173`) junto a la sesión de Claude Code (acomodo «Columnas»). Con **Recargar con cambios** encendido revisa la página cada pocos segundos y se recarga sola cuando el sitio cambia; también tiene vista de celular. Lista tus sitios de Lovable para agregarlos de un clic.
+
+## ⌘ Atajos de Chrome
+
+En la ventana de Blender Play, **Atajos de Chrome**: eliges una página abierta en Chrome (o una app instalada de Chrome) y le pones una tecla. La tecla trae esa ventana al frente donde esté, y si no está abierta la abre.
+
 ## 📊 Consumo
 
 - **Cuánto queda de la semana**: con **Mostrar cuánto queda de la semana** (lee los límites de claude.ai de cada cuenta), el panel muestra una barra por cuenta con el porcentaje que te queda del límite semanal, cuándo se renueva y el límite de 5 horas. La barra de menú muestra una pila pequeña con lo que queda de la cuenta más cerca del límite (en rojo con 15 % o menos). Se puede quitar con **Semana en la barra de menú**.
@@ -55,6 +72,7 @@ Funcionan desde cualquier app (y desde el macro pad):
 | ⌃⌥⌘P | Publica los proyectos de Lovable pendientes |
 | ⌃⌥⌘D | Dictar: la primera vez empieza a escuchar; la segunda escribe el texto y lo envía. Va al panel en el que estás escribiendo o, si estás en otra app, a esa app (necesita permiso de Accesibilidad) |
 | ⌃⌥⌘U | Abre el consumo de hoy |
+| ⌃⌥⌘Q | Manda a la cola del panel lo que dictas o tienes escrito, sin enviarlo |
 | ⌃⌥⌘M | Abre el panel de la barra de menú |
 
 ## 💼 Proyectos y cobro
