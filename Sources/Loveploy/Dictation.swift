@@ -58,42 +58,80 @@ final class Dictation: ObservableObject {
             Self.tell("El reconocimiento de voz no está disponible ahora. Revisa que Dictado esté activado en Ajustes del Sistema → Teclado.")
             return
         }
-        let request = SFSpeechAudioBufferRecognitionRequest()
-        request.shouldReportPartialResults = true
-        if recognizer.supportsOnDeviceRecognition { request.requiresOnDeviceRecognition = true }
-        request.addsPunctuation = true
-
         let engine = AVAudioEngine()
         let input = engine.inputNode
-        let format = input.outputFormat(forBus: 0)
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
-            request.append(buffer)
+        let feed = feed
+        // nil format: the tap takes the microphone's own format (an AirPods or USB mic with
+        // another sample rate made a fixed format fail).
+        input.installTap(onBus: 0, bufferSize: 2048, format: nil) { buffer, _ in
+            feed.append(buffer)
         }
         do {
             engine.prepare()
             try engine.start()
         } catch {
-            Self.tell("No se pudo abrir el micrófono: \(error.localizedDescription)")
             input.removeTap(onBus: 0)
+            Self.tell("No se pudo abrir el micrófono: \(error.localizedDescription)")
             return
         }
+        self.recognizer = recognizer
         self.engine = engine
-        self.request = request
         self.target = view
         self.pane = pane
         self.send = send
+        committed = ""
+        segment = ""
         heard = ""
+        restarts = 0
         finishing = false
+        startSegment()
+    }
+
+    // Apple's recognizer ends a request after about a minute or a long pause; dictation keeps
+    // going by chaining requests and joining their text, so it doesn't stop on its own.
+    private var recognizer: SFSpeechRecognizer?
+    private let feed = AudioFeed()
+    private var committed = ""
+    private var segment = ""
+    private var generation = 0
+    private var restarts = 0
+
+    private func startSegment() {
+        guard let recognizer else { return }
+        generation += 1
+        let current = generation
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        request.addsPunctuation = true
+        // Apple's servers when there's a connection (better Spanish); on the Mac otherwise.
+        request.requiresOnDeviceRecognition = false
+        request.taskHint = .dictation
+        feed.set(request)
+        self.request = request
         task = recognizer.recognitionTask(with: request) { result, error in
             let text = result?.bestTranscription.formattedString
             let final = result?.isFinal ?? false
+            let failed = error != nil
             DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    let dictation = Dictation.shared
-                    if let text { dictation.heard = text }
-                    if final || (error != nil && dictation.finishing) { dictation.deliver() }
-                }
+                MainActor.assumeIsolated { Dictation.shared.segmentUpdate(current, text: text, final: final, failed: failed) }
             }
+        }
+    }
+
+    private func segmentUpdate(_ id: Int, text: String?, final: Bool, failed: Bool) {
+        guard id == generation, pane != nil else { return }
+        if let text { segment = text }
+        heard = [committed, segment].filter { !$0.isEmpty }.joined(separator: " ")
+        guard final || failed else { return }
+        if !segment.isEmpty { committed = heard }
+        segment = ""
+        if finishing {
+            deliver()
+        } else if restarts < 40 {
+            restarts += 1
+            startSegment()
+        } else {
+            stop()
         }
     }
 
@@ -131,6 +169,11 @@ final class Dictation: ObservableObject {
     }
 
     private func reset() {
+        feed.set(nil)
+        recognizer = nil
+        committed = ""
+        segment = ""
+        generation += 1
         engine = nil
         request = nil
         task = nil
@@ -261,6 +304,23 @@ final class Dictation: ObservableObject {
         }
         guard speech else { return false }
         return await AVCaptureDevice.requestAccess(for: .audio)
+    }
+}
+
+/// Hands the microphone's audio to whichever recognition request is current (the tap runs on
+/// an audio thread while requests are swapped on the main one).
+final class AudioFeed: @unchecked Sendable {
+    private let lock = NSLock()
+    private var request: SFSpeechAudioBufferRecognitionRequest?
+
+    func set(_ request: SFSpeechAudioBufferRecognitionRequest?) {
+        lock.lock(); defer { lock.unlock() }
+        self.request = request
+    }
+
+    func append(_ buffer: AVAudioPCMBuffer) {
+        lock.lock(); defer { lock.unlock() }
+        request?.append(buffer)
     }
 }
 

@@ -28,9 +28,22 @@ cp Resources/Info.plist "$APP/Contents/Info.plist"
 iconutil -c icns dist/Loveploy.iconset -o "$APP/Contents/Resources/Loveploy.icns"
 rm -rf dist/Loveploy.iconset "$BIN"
 
-# Ad-hoc signature so macOS runs it locally. Downloaded builds still need
-# right click → Open the first time (they aren't notarized).
-codesign --force --deep --sign - "$APP"
+# Signing. macOS ties permissions (microphone, Keychain "Always Allow", Accessibility,
+# notifications) to the app's signing identity. An ad-hoc signature is new on every build, so
+# each update asked for everything again. With a certificate (SIGN_IDENTITY, or one named
+# "Blender Play" in the Keychain) the identity stays the same and permissions are kept.
+IDENTITY="${SIGN_IDENTITY:-}"
+if [[ -z "$IDENTITY" ]]; then
+    # By fingerprint: a self-signed certificate isn't "valid" for find-identity -v.
+    IDENTITY="$(security find-identity -p codesigning 2>/dev/null | awk '/"Blender Play/ {print $2; exit}')"
+fi
+if [[ -n "$IDENTITY" ]]; then
+    echo "Firmando con: $IDENTITY"
+    codesign --force --deep --sign "$IDENTITY" "$APP"
+else
+    echo "Sin certificado: firma ad hoc (macOS volverá a pedir permisos con cada versión)."
+    codesign --force --deep --sign - "$APP"
+fi
 
 (cd dist && rm -f BlenderPlay.zip && ditto -c -k --keepParent "Blender Play.app" BlenderPlay.zip)
 echo "Listo: $APP"

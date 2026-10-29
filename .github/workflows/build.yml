@@ -13,6 +13,28 @@ jobs:
       - uses: actions/checkout@v4
       - name: Test core
         run: swift test
+      # With a signing certificate in the repo's secrets, every build has the same identity,
+      # so macOS keeps the permissions (microphone, Keychain, Accessibility, notifications)
+      # between updates. Without it the build is signed ad hoc, as before.
+      - name: Import signing certificate
+        env:
+          P12: ${{ secrets.BP_SIGNING_P12 }}
+          P12_PASSWORD: ${{ secrets.BP_SIGNING_PASSWORD }}
+        run: |
+          if [ -z "$P12" ]; then echo "Sin certificado: firma ad hoc."; exit 0; fi
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PASSWORD="$(uuidgen)"
+          echo "$P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/signing.p12" -k "$KEYCHAIN" -P "$P12_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/signing.p12"
+          # By fingerprint: a self-signed certificate isn't "valid" for find-identity -v.
+          IDENTITY="$(security find-identity -p codesigning "$KEYCHAIN" | awk '/[0-9A-F]{40}/ {print $2; exit}')"
+          echo "SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
       - name: Build Blender Play.app
         run: scripts/build-app.sh
       - uses: actions/upload-artifact@v4
