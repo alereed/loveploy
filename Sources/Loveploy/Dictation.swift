@@ -48,6 +48,43 @@ final class Dictation: ObservableObject {
         }
     }
 
+    /// ⌃⌥⌘Q: queue instead of send. While dictating, the dictated text goes to the pane's
+    /// queue; otherwise what's typed in claude.ai's box is moved to the queue.
+    private var toQueue = false
+
+    func queueHotKey() {
+        if pane != nil, pane != Self.anywhere {
+            toQueue = true
+            stop()
+            return
+        }
+        guard let found = SessionGroups.shared.focusedPane(), let web = found.1 as? WKWebView else { NSSound.beep(); return }
+        let pane = found.0
+        web.evaluateJavaScript(Self.takeComposerText) { result, _ in
+            MainActor.assumeIsolated {
+                guard let text = result as? String, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { NSSound.beep(); return }
+                MessageQueues.shared.add(text, to: pane)
+            }
+        }
+    }
+
+    /// Takes the text out of claude.ai's message box (and empties it).
+    static let takeComposerText = """
+    (function () {
+      var el = document.activeElement;
+      if (!(el && (el.isContentEditable || el.tagName === 'TEXTAREA'))) {
+        var all = document.querySelectorAll('[contenteditable="true"], textarea');
+        el = all[all.length - 1];
+      }
+      if (!el) return '';
+      var text = el.tagName === 'TEXTAREA' ? el.value : el.innerText;
+      el.focus();
+      document.execCommand('selectAll', false, null);
+      document.execCommand('delete', false, null);
+      return text;
+    })()
+    """
+
     private func start(pane: UUID, view: NSView?, send: Bool) async {
         guard await Self.allowed() else {
             Self.tell("Permite el micrófono y el reconocimiento de voz a Blender Play en Ajustes del Sistema → Privacidad y seguridad.")
@@ -156,7 +193,9 @@ final class Dictation: ObservableObject {
     private func deliver() {
         guard pane != nil else { return }
         let text = heard.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !text.isEmpty {
+        if !text.isEmpty, toQueue, let pane, pane != Self.anywhere {
+            MessageQueues.shared.add(text, to: pane)
+        } else if !text.isEmpty {
             if let target {
                 let send = self.send
                 Self.insert(text, into: target) { if send { Self.submit(target) } }
@@ -182,6 +221,7 @@ final class Dictation: ObservableObject {
         heard = ""
         finishing = false
         send = false
+        toQueue = false
     }
 
     /// Sends the message: Enter in the terminal, the send button on claude.ai.

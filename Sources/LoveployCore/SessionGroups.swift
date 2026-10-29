@@ -61,6 +61,9 @@ public struct SessionPane: Codable, Identifiable, Hashable, Sendable {
         /// A claude.ai page in one of your own Chrome windows (or an installed Chrome app),
         /// with your Chrome sign-in, placed over the pane's spot when the group opens.
         case chrome
+        /// Any website or local preview (http://localhost too), shown next to the sessions;
+        /// it can reload itself when the site changes.
+        case preview
     }
 
     public var id: UUID
@@ -82,11 +85,18 @@ public struct SessionPane: Codable, Identifiable, Hashable, Sendable {
     public var startsNew: Bool
     /// The billing project this pane's time and tokens go to (nil: the group's).
     public var project: UUID?
+    /// Preview: reload when the site changes.
+    public var autoReload: Bool
+    /// Preview: shown at a phone's width.
+    public var mobile: Bool
 
     public init(
         id: UUID = UUID(), kind: Kind, title: String, account: String? = nil, sessionID: String? = nil,
-        directory: String? = nil, configDir: String? = nil, url: String? = nil, startsNew: Bool = false, project: UUID? = nil
+        directory: String? = nil, configDir: String? = nil, url: String? = nil, startsNew: Bool = false, project: UUID? = nil,
+        autoReload: Bool = true, mobile: Bool = false
     ) {
+        self.autoReload = autoReload
+        self.mobile = mobile
         self.startsNew = startsNew
         self.project = project
         self.id = id
@@ -118,16 +128,21 @@ public struct SessionPane: Codable, Identifiable, Hashable, Sendable {
     }
 
     /// What the terminal pane runs (through the user's login shell, so `claude` is on the PATH).
-    public var shellCommand: String {
+    public var shellCommand: String { shellCommand(settings: nil) }
+
+    /// The same, with extra Claude Code settings (the hooks that tell Blender Play when Claude
+    /// finishes or needs you).
+    public func shellCommand(settings: String?) -> String {
         var parts: [String] = []
         if let directory, !directory.isEmpty {
             parts.append("cd \(Self.quote(directory))")
         }
+        var claude = "exec claude"
         if let sessionID, !sessionID.isEmpty {
-            parts.append("exec claude \(startsNew ? "--session-id" : "--resume") \(Self.quote(sessionID))")
-        } else {
-            parts.append("exec claude")
+            claude += " \(startsNew ? "--session-id" : "--resume") \(Self.quote(sessionID))"
         }
+        if let settings { claude += " --settings \(Self.quote(settings))" }
+        parts.append(claude)
         return parts.joined(separator: " && ")
     }
 
@@ -139,7 +154,7 @@ public struct SessionPane: Codable, Identifiable, Hashable, Sendable {
 
     static func quote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
 
-    enum CodingKeys: String, CodingKey { case id, kind, title, account, sessionID, directory, configDir, url, startsNew, project }
+    enum CodingKeys: String, CodingKey { case id, kind, title, account, sessionID, directory, configDir, url, startsNew, project, autoReload, mobile }
 
     // Lenient: a pane saved by another version still loads.
     public init(from decoder: Decoder) throws {
@@ -154,6 +169,20 @@ public struct SessionPane: Codable, Identifiable, Hashable, Sendable {
         url = try? c.decodeIfPresent(String.self, forKey: .url)
         startsNew = (try? c.decodeIfPresent(Bool.self, forKey: .startsNew)) ?? false
         project = try? c.decodeIfPresent(UUID.self, forKey: .project)
+        autoReload = (try? c.decodeIfPresent(Bool.self, forKey: .autoReload)) ?? true
+        mobile = (try? c.decodeIfPresent(Bool.self, forKey: .mobile)) ?? false
+    }
+
+    /// A preview pane for any web address (https, or http for local servers).
+    public static func preview(_ address: String, title: String?) -> SessionPane? {
+        var text = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !text.contains("://") {
+            let local = text.hasPrefix("localhost") || text.hasPrefix("127.0.0.1")
+            text = (local ? "http://" : "https://") + text
+        }
+        guard let url = URL(string: text), let scheme = url.scheme, ["http", "https"].contains(scheme), let host = url.host, !host.isEmpty else { return nil }
+        let name = title?.trimmingCharacters(in: .whitespaces).isEmpty == false ? title! : host
+        return SessionPane(kind: .preview, title: name, url: url.absoluteString)
     }
 }
 

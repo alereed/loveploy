@@ -148,13 +148,14 @@ struct LovableLine: View {
 // MARK: - The Loveploy window
 
 enum MainSection: String, CaseIterable, Identifiable {
-    case home, groups, lovable, projects, usage
+    case home, groups, chrome, lovable, projects, usage
     var id: String { rawValue }
 
     var label: String {
         switch self {
         case .home: return "Panel completo"
         case .groups: return "Grupos de sesiones"
+        case .chrome: return "Atajos de Chrome"
         case .lovable: return "Lovable"
         case .projects: return "Proyectos y cobro"
         case .usage: return "Consumo detallado"
@@ -165,6 +166,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         switch self {
         case .home: return "menubar.rectangle"
         case .groups: return "rectangle.split.2x2"
+        case .chrome: return "macwindow.badge.plus"
         case .lovable: return "heart"
         case .projects: return "briefcase"
         case .usage: return "chart.bar"
@@ -225,6 +227,8 @@ struct MainWindowView: View {
                 MenuView(inWindow: true)
             case .groups:
                 GroupsManagerView()
+            case .chrome:
+                ChromeShortcutsView()
             case .lovable:
                 if let model = LoveployBridge.model {
                     LovableView().environmentObject(model)

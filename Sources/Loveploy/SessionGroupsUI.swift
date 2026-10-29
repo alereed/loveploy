@@ -69,6 +69,23 @@ final class SessionGroups: ObservableObject {
         save()
     }
 
+    /// A pane that's loaded in an open group window, with its view.
+    func loaded(_ pane: UUID) -> (SessionPane, NSView)? {
+        for controller in windows.values {
+            guard let group = group(controller.groupID), let model = group.panes.first(where: { $0.id == pane }),
+                  let view = controller.hosts.existingView(pane) else { continue }
+            return (model, view)
+        }
+        return nil
+    }
+
+    func pane(_ id: UUID) -> SessionPane? {
+        for group in groups { if let pane = group.panes.first(where: { $0.id == id }) { return pane } }
+        return nil
+    }
+
+    func paneTitle(_ id: UUID) -> String? { pane(id)?.title }
+
     /// The pane you're typing in, in the group window in front.
     func focusedPane() -> (UUID, NSView)? {
         for controller in windows.values {
@@ -511,8 +528,10 @@ final class PaneHosts: ObservableObject {
         for pane in group.panes where !sleeping.contains(pane.id) {
             guard let view = views[pane.id] else { continue }
             if let focused, focused === view || focused.isDescendant(of: view) { continue }
+            // A pane with queued messages stays awake so the queue can go on.
+            if MessageQueues.shared.hasPending(pane.id) { continue }
             switch pane.kind {
-            case .cloud:
+            case .cloud, .preview:
                 let away = awaySince.map { now.timeIntervalSince($0) } ?? 0
                 let idle = now.timeIntervalSince(PaneUse.last[pane.id] ?? .distantPast)
                 if force || (webLimit > 0 && away > Double(webLimit) && idle > Double(webLimit)) { sleep(pane.id) }
@@ -548,11 +567,12 @@ final class PaneHosts: ObservableObject {
         let shell = Self.loginShell
         terminal.startProcess(
             executable: shell,
-            args: ["-l", "-i", "-c", pane.shellCommand],
+            args: ["-l", "-i", "-c", pane.shellCommand(settings: MessageQueues.hookSettings(pane: pane.id))],
             environment: environment.map { "\($0.key)=\($0.value)" },
             execName: "-" + URL(fileURLWithPath: shell).lastPathComponent
         )
         if pane.startsNew { SessionGroups.shared.markStarted(pane.id) }
+        MessageQueues.shared.launched(pane.id)
         return terminal
     }
 
@@ -565,11 +585,13 @@ final class PaneHosts: ObservableObject {
             configuration.websiteDataStore = .default()
         }
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
-        PaneActivity.install(in: configuration, pane: pane.id)
-        let mic = ClaudeMicBridge.install(in: configuration, pane: pane.id)
+        let isPreview = pane.kind == .preview
+        let mic = isPreview ? nil : ClaudeMicBridge.install(in: configuration, pane: pane.id)
+        if !isPreview { PaneActivity.install(in: configuration, pane: pane.id) }
         PaneUse.touch(pane.id)
         let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 420), configuration: configuration)
-        mic.web = web
+        mic?.web = web
+        if isPreview { PreviewWatcher.shared.watch(pane.id, web: web) }
         web.customUserAgent = LovableWeb.userAgent
         web.allowsBackForwardNavigationGestures = true
         let popups = WebPopups()
@@ -950,6 +972,12 @@ struct PaneCell: View {
                     ChromePaneView(pane: pane, groupID: groupID)
                 } else if hosts.sleeping.contains(pane.id) {
                     SleepingPaneView(pane: pane) { hosts.wake(pane.id) }
+                } else if pane.kind == .preview && pane.mobile {
+                    // A phone's width, centered.
+                    PaneHostView(pane: pane, hosts: hosts)
+                        .frame(width: 390)
+                        .frame(maxWidth: .infinity)
+                        .background(Color.black.opacity(0.25))
                 } else {
                     PaneHostView(pane: pane, hosts: hosts)
                 }
@@ -969,7 +997,7 @@ struct PaneCell: View {
     private var header: some View {
         HStack(spacing: 6) {
             Circle().fill(Accounts.tint(pane.account)).frame(width: 8, height: 8)
-            Image(systemName: pane.kind == .local ? "terminal" : pane.kind == .chrome ? "macwindow" : "globe")
+            Image(systemName: pane.kind == .local ? "terminal" : pane.kind == .chrome ? "macwindow" : pane.kind == .preview ? "eye" : "globe")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             Text(pane.title).font(.system(size: 12, weight: .medium)).lineLimit(1)
@@ -991,7 +1019,10 @@ struct PaneCell: View {
                 if pane.kind == .chrome { Task { await ChromePlacer.shared.arrange(groupID) } } else { hosts.reload(pane) }
             } label: { Image(systemName: "arrow.clockwise") }
                 .help(pane.kind == .local ? "Reiniciar la sesión" : pane.kind == .chrome ? "Acomodar Chrome" : "Recargar")
-            if pane.kind != .chrome && !hosts.sleeping.contains(pane.id) {
+            if pane.kind == .preview {
+                PreviewControls(pane: pane, groupID: groupID)
+            } else if pane.kind != .chrome && !hosts.sleeping.contains(pane.id) {
+                QueueButton(pane: pane)
                 DictationButton(pane: pane, hosts: hosts)
             }
                         Button { openOutside() } label: { Image(systemName: "arrow.up.forward.app") }
@@ -1011,7 +1042,7 @@ struct PaneCell: View {
 
     private func openOutside() {
         switch pane.kind {
-        case .cloud:
+        case .cloud, .preview:
             if let url = pane.url.flatMap(URL.init(string:)) { NSWorkspace.shared.open(url) }
         case .chrome:
             if let url = pane.url.flatMap(URL.init(string:)),
@@ -1288,6 +1319,7 @@ struct AddPaneView: View {
                 Text("En esta Mac (\(sessions.count))").tag(0)
                 Text("En Chrome").tag(2)
                 Text("En la nube").tag(3)
+                Text("Vista web").tag(4)
                 Text("Pegar dirección").tag(1)
             }
             .pickerStyle(.segmented)
@@ -1295,6 +1327,7 @@ struct AddPaneView: View {
             switch tab {
             case 2: ChromeTabsList(groupID: groupID, done: done)
             case 3: CloudSessionsList(groupID: groupID, done: done)
+            case 4: PreviewPicker(groupID: groupID, done: done)
             case 1: cloud
             default: local
             }

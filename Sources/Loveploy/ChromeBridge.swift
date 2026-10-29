@@ -79,6 +79,32 @@ enum ChromeBridge {
         return ChromeTab.parse(try await run(script))
     }
 
+    /// Brings forward the Chrome window showing `match` (activating that tab), or opens `url`
+    /// in a new window when it isn't open.
+    static func focus(match: String, url: String) async throws {
+        let script = """
+        tell application id "\(bundleID)"
+            repeat with w in windows
+                set i to 0
+                repeat with x in tabs of w
+                    set i to i + 1
+                    if (URL of x) starts with \(quote(match)) then
+                        set active tab index of w to i
+                        set index of w to 1
+                        activate
+                        return
+                    end if
+                end repeat
+            end repeat
+            set w to make new window
+            set URL of active tab of w to \(quote(url))
+            activate
+        end tell
+        """
+        _ = try await run(script)
+        await MainActor.run { bringForward() }
+    }
+
     /// The address in the front Chrome window.
     static func frontURL() async throws -> String {
         guard isRunning else { throw ChromeError.notRunning }

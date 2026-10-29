@@ -41,6 +41,7 @@ enum LoveployBridge {
             .sink { _ in MainActor.assumeIsolated { Engine.shared.onChange?() } }
             .store(in: &observers)
         DevClock.shared.start()
+        MessageQueues.shared.start()
         Engine.shared.updateHotKeys()   // adds the groups' shortcuts
         SessionGroups.shared.openAtLaunch()
     }
@@ -100,6 +101,9 @@ enum LoveployBridge {
         })
         keys.append(.init(key: kVK_ANSI_D, mods: all) { Dictation.shared.hotKey() })
         keys.append(.init(key: kVK_ANSI_U, mods: all) { MainWindow.show(.usage) })
+        // ⌃⌥⌘Q: what you dictate (or have typed in claude.ai) goes to the pane's queue instead of out.
+        keys.append(.init(key: kVK_ANSI_Q, mods: all) { Dictation.shared.queueHotKey() })
+        keys += ChromeShortcuts.shared.hotKeys()
         return keys
     }
 
