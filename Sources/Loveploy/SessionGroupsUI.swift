@@ -382,12 +382,53 @@ final class GroupWindowController: NSWindowController, NSWindowDelegate {
     /// One click anywhere in the window brings back every paused pane of the group.
     private var clickMonitor: Any?
 
+    private var keyMonitor: Any?
+
     func watchClicks() {
         clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
             MainActor.assumeIsolated {
-                if let self, event.window === self.window, !self.hosts.sleeping.isEmpty { self.wakeAll() }
+                guard let self, event.window === self.window else { return }
+                if !self.hosts.sleeping.isEmpty { self.wakeAll() }
+                // Highlight the pane you clicked in.
+                DispatchQueue.main.async { self.hosts.focused = self.paneWithFocus() }
             }
             return event
+        }
+        // ⌃Tab / ⌃⇧Tab: next / previous session of the group (plain Tab stays Claude Code's).
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            guard Int(event.keyCode) == 48, flags.contains(.control), !flags.contains(.command), !flags.contains(.option) else { return event }
+            return MainActor.assumeIsolated {
+                guard let self, event.window === self.window else { return event }
+                self.focusPane(by: flags.contains(.shift) ? -1 : 1)
+                return nil
+            }
+        }
+    }
+
+    /// The pane holding the keyboard focus.
+    func paneWithFocus() -> UUID? {
+        guard let responder = window?.firstResponder as? NSView, let group = SessionGroups.shared.group(groupID) else { return nil }
+        return group.panes.first { pane in
+            guard let view = hosts.existingView(pane.id) else { return false }
+            return responder === view || responder.isDescendant(of: view)
+        }?.id
+    }
+
+    /// Moves the keyboard to the next (or previous) session, waking it if it was paused.
+    func focusPane(by step: Int) {
+        guard let group = SessionGroups.shared.group(groupID) else { return }
+        let panes = group.panes.filter { $0.kind != .chrome }
+        guard !panes.isEmpty else { return }
+        let current = (hosts.focused ?? paneWithFocus()).flatMap { id in panes.firstIndex { $0.id == id } }
+        let next = panes[((current ?? (step > 0 ? -1 : 0)) + step + panes.count) % panes.count]
+        if hosts.sleeping.contains(next.id) { hosts.wake(next.id) }
+        hosts.focused = next.id
+        // The view may only exist after the wake; give SwiftUI a moment to place it.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let view = self.hosts.existingView(next.id) else { return }
+            self.window?.makeFirstResponder(view)
+            if let web = view as? WKWebView { web.evaluateJavaScript(Dictation.focusComposer) }
         }
     }
 
@@ -416,6 +457,8 @@ final class GroupWindowController: NSWindowController, NSWindowDelegate {
         sweeper = nil
         if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
         clickMonitor = nil
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        keyMonitor = nil
         hosts.terminateAll()
         SessionGroups.shared.windowClosed(groupID)
     }
@@ -430,6 +473,8 @@ final class PaneHosts: ObservableObject {
     /// Panes let go to save memory; they come back on a click (or, for web panes, when you
     /// return to the window).
     @Published private(set) var sleeping: Set<UUID> = []
+    /// The pane last moved to or clicked in, outlined in the window.
+    @Published var focused: UUID?
     private var views: [UUID: NSView] = [:]
     private var observers: [UUID: TerminalObserver] = [:]
     private var popups: [WebPopups] = []
@@ -871,7 +916,7 @@ struct GroupView: View {
             } label: { Label("Igualar", systemImage: "equal.square") }
             .font(.system(size: 12))
             .keyboardShortcut("=", modifiers: [.command, .option])
-            .help("Todos los paneles del mismo ancho y alto (⌥⌘=)")
+            .help("Todos los paneles del mismo ancho y alto (⌥⌘=). ⌃Tab pasa a la siguiente sesión, ⌃⇧Tab a la anterior")
             .disabled(group.panes.count < 2)
             if group.panes.contains(where: { $0.kind == .chrome }) {
                 Button {
@@ -992,6 +1037,11 @@ struct PaneCell: View {
             }
         }
         .frame(minWidth: 220, minHeight: 160)
+        .overlay(
+            RoundedRectangle(cornerRadius: 2)
+                .stroke(Color.accentColor, lineWidth: hosts.focused == pane.id && count > 1 ? 2 : 0)
+                .allowsHitTesting(false)
+        )
     }
 
     private var header: some View {

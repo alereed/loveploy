@@ -74,6 +74,7 @@ Funcionan desde cualquier app (y desde el macro pad):
 | ⌃⌥⌘U | Abre el consumo de hoy |
 | ⌃⌥⌘Q | Manda a la cola del panel lo que dictas o tienes escrito, sin enviarlo |
 | ⌃⌥⌘M | Abre el panel de la barra de menú |
+| ⌃Tab / ⌃⇧Tab | Dentro de un grupo: pasa a la siguiente / anterior sesión (el Tab solo sigue siendo de Claude Code) |
 
 ## 💼 Proyectos y cobro
 
