@@ -82,6 +82,9 @@ enum ChromeBridge {
     /// Brings forward the Chrome window showing `match` (activating that tab), or opens `url`
     /// in a new window when it isn't open.
     static func focus(match: String, url: String) async throws {
+        // Chrome alone tends to bring back the window that was already active (another
+        // Space, an installed app...), so: pick the tab, read its window's title, and raise
+        // exactly that window ourselves.
         let script = """
         tell application id "\(bundleID)"
             repeat with w in windows
@@ -90,19 +93,54 @@ enum ChromeBridge {
                     set i to i + 1
                     if (URL of x) starts with \(quote(match)) then
                         set active tab index of w to i
-                        set index of w to 1
                         activate
-                        return
+                        set index of w to 1
+                        delay 0.1
+                        return name of w
                     end if
                 end repeat
             end repeat
             set w to make new window
             set URL of active tab of w to \(quote(url))
             activate
+            return ""
         end tell
         """
-        _ = try await run(script)
-        await MainActor.run { bringForward() }
+        let title = try await run(script).trimmingCharacters(in: .whitespacesAndNewlines)
+        await MainActor.run {
+            if title.isEmpty || !raiseWindow(titled: title) { bringForward() }
+        }
+    }
+
+    /// Raises the Chrome (or installed Chrome app) window with this title and brings its app
+    /// forward, through Accessibility. False when it can't (no permission, no such window).
+    @MainActor
+    static func raiseWindow(titled title: String) -> Bool {
+        guard AXIsProcessTrusted() else {
+            // Ask once; until then the AppleScript order above is the best we can do.
+            _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
+            return false
+        }
+        let apps = NSWorkspace.shared.runningApplications.filter { ($0.bundleIdentifier ?? "").hasPrefix(bundleID) }
+        for app in apps {
+            let element = AXUIElementCreateApplication(app.processIdentifier)
+            var value: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &value) == .success,
+                  let windows = value as? [AXUIElement] else { continue }
+            for window in windows {
+                var name: CFTypeRef?
+                AXUIElementCopyAttributeValue(window, kAXTitleAttribute as CFString, &name)
+                guard let windowTitle = name as? String, windowTitle == title || windowTitle.hasPrefix(title) || title.hasPrefix(windowTitle) else { continue }
+                // Un-minimize, make it the main window, raise it, then bring its app forward.
+                AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+                AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
+                AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+                app.activate(options: [])
+                AXUIElementSetAttributeValue(element, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+                return true
+            }
+        }
+        return false
     }
 
     /// The front Chrome window's tab: address and title.
