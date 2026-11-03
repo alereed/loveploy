@@ -42,6 +42,10 @@ Cada panel tiene una **cola de mensajes** (botón de la lista en su barra): escr
 
 En **Agregar sesión → Vista web** pones cualquier sitio, tu versión publicada o un servidor local (`localhost:5173`) junto a la sesión de Claude Code (acomodo «Columnas»). Con **Recargar con cambios** encendido revisa la página cada pocos segundos y se recarga sola cuando el sitio cambia; también tiene vista de celular. Lista tus sitios de Lovable para agregarlos de un clic.
 
+## 🧑‍💼 Perfil de Chrome por cuenta
+
+En **Atajos de Chrome** eliges el perfil de Chrome de cada cuenta (por defecto lo adivina: BLENDER → el perfil de blender.mx, INKRE → el de inkre.mx). Las ligas que abres desde una sesión de claude.ai (un PR, un sitio), el botón «abrir en el navegador» y las ventanas de Chrome nuevas de un grupo se abren en ese perfil, no en el último que usaste. Las páginas de inicio de sesión siguen dentro de Blender Play.
+
 ## ⌘ Atajos de Chrome
 
 En la ventana de Blender Play, **Atajos de Chrome**: eliges una página abierta en Chrome (o una app instalada de Chrome) y le pones una tecla. La tecla trae esa ventana al frente donde esté, y si no está abierta la abre.

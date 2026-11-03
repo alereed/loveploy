@@ -81,7 +81,7 @@ enum ChromeBridge {
 
     /// Brings forward the Chrome window showing `match` (activating that tab), or opens `url`
     /// in a new window when it isn't open.
-    static func focus(match: String, url: String) async throws {
+    static func focus(match: String, url: String, profile: String? = nil) async throws {
         // Chrome alone tends to bring back the window that was already active (another
         // Space, an installed app...), so: pick the tab, read its window's title, and raise
         // exactly that window ourselves.
@@ -100,13 +100,15 @@ enum ChromeBridge {
                     end if
                 end repeat
             end repeat
-            set w to make new window
-            set URL of active tab of w to \(quote(url))
-            activate
-            return ""
+            return "<missing>"
         end tell
         """
         let title = try await run(script).trimmingCharacters(in: .whitespacesAndNewlines)
+        // Not open anywhere: open it in its profile.
+        if title == "<missing>" {
+            await MainActor.run { open(url, profile: profile) }
+            return
+        }
         await MainActor.run {
             if title.isEmpty || !raiseWindow(titled: title) { bringForward() }
         }
@@ -175,7 +177,7 @@ enum ChromeBridge {
 
     /// Moves each page's Chrome window to its rectangle (screen coordinates, AppKit origin),
     /// opening a new Chrome window for pages that aren't open, and brings them to the front.
-    static func place(_ items: [(url: String, rect: NSRect)]) async throws {
+    static func place(_ items: [(url: String, rect: NSRect, profile: String?)], retry: Bool = true) async throws {
         guard !items.isEmpty else { return }
         let top = NSScreen.screens.first?.frame.maxY ?? 0
         var lines: [String] = []
@@ -185,7 +187,7 @@ enum ChromeBridge {
             let base = "https://\(url.host ?? "claude.ai")\(url.path)"
             let r = item.rect
             let bounds = "{\(Int(r.minX)), \(Int(top - r.maxY)), \(Int(r.maxX)), \(Int(top - r.minY))}"
-            lines.append("my placePage(\(quote(base)), \(quote(item.url)), \(bounds))")
+            lines.append("set missing to missing & (my placePage(\(quote(base)), \(quote(item.url)), \(bounds)))")
         }
         let script = """
         on placePage(base, full, b)
@@ -198,19 +200,25 @@ enum ChromeBridge {
                             set active tab index of w to i
                             set bounds of w to b
                             set index of w to 1
-                            return
+                            return ""
                         end if
                     end repeat
                 end repeat
-                set w to make new window
-                set URL of active tab of w to full
-                set bounds of w to b
             end tell
+            return full & linefeed
         end placePage
+        set missing to ""
         \(lines.joined(separator: "\n"))
+        return missing
         """
-        _ = try await run(script)
+        let missing = try await run(script).split(whereSeparator: \.isNewline).map(String.init)
         await MainActor.run { bringForward() }
+        // Pages that aren't open: open them in their account's Chrome profile, then place them.
+        let toOpen = items.filter { item in missing.contains(item.url) }
+        guard retry, !toOpen.isEmpty else { return }
+        for item in toOpen { open(item.url, profile: item.profile) }
+        try await Task.sleep(nanoseconds: 2_500_000_000)
+        try await place(toOpen, retry: false)
     }
 
     /// Chrome, and installed Claude apps (their windows belong to a small app of their own).
@@ -325,9 +333,9 @@ final class ChromePlacer {
     @discardableResult
     func arrange(_ groupID: UUID) async -> String? {
         guard let group = SessionGroups.shared.group(groupID) else { return nil }
-        let items = group.panes.filter { $0.kind == .chrome }.compactMap { pane -> (url: String, rect: NSRect)? in
+        let items = group.panes.filter { $0.kind == .chrome }.compactMap { pane -> (url: String, rect: NSRect, profile: String?)? in
             guard let url = pane.url, let rect = rect(for: pane.id) else { return nil }
-            return (url, rect)
+            return (url, rect, ChromeProfiles.shared.profile(for: pane.account)?.directory)
         }
         guard !items.isEmpty else { return nil }
         do {
@@ -378,5 +386,97 @@ struct ChromePaneView: View {
             .padding()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+// MARK: - Chrome profiles per account
+
+/// Which Chrome profile each account's links open in (BLENDER → the blender.mx profile).
+@MainActor
+final class ChromeProfiles: ObservableObject {
+    static let shared = ChromeProfiles()
+    @Published private(set) var profiles: [ChromeProfile] = []
+    @Published private var chosen: [String: String]
+    private let key = "loveploy.chromeProfiles"
+
+    private init() {
+        chosen = UserDefaults.standard.dictionary(forKey: key) as? [String: String] ?? [:]
+        reload()
+    }
+
+    func reload() {
+        let file = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Google/Chrome/Local State")
+        profiles = (try? Data(contentsOf: file)).map(ChromeProfile.parse(localState:)) ?? []
+    }
+
+    /// The profile chosen for the account, or the one that looks like it.
+    func profile(for account: String?) -> ChromeProfile? {
+        guard let account else { return nil }
+        if let dir = chosen[account] { return dir.isEmpty ? nil : profiles.first { $0.directory == dir } }
+        return ChromeProfile.guess(for: Accounts.name(account), in: profiles)
+    }
+
+    /// "" = Chrome's last used profile; nil = guess.
+    func choice(for account: String) -> String? { chosen[account] }
+
+    func set(_ directory: String?, for account: String) {
+        chosen[account] = directory
+        UserDefaults.standard.set(chosen, forKey: key)
+    }
+}
+
+extension ChromeBridge {
+    /// Opens the address in a given Chrome profile (a new tab in that profile's window).
+    static func open(_ url: String, profile: String?) {
+        guard let profile, !profile.isEmpty else {
+            if let link = URL(string: url), let chrome = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+                NSWorkspace.shared.open([link], withApplicationAt: chrome, configuration: NSWorkspace.OpenConfiguration())
+            }
+            return
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = ["-nb", bundleID, "--args", "--profile-directory=\(profile)", url]
+        try? process.run()
+    }
+
+    /// For a pane's account.
+    @MainActor
+    static func open(_ url: String, account: String?) {
+        open(url, profile: ChromeProfiles.shared.profile(for: account)?.directory)
+    }
+}
+
+/// Picks, per account, the Chrome profile its links open in.
+struct ChromeProfilesSettings: View {
+    @ObservedObject private var engine = Engine.shared
+    @ObservedObject private var chrome = ChromeProfiles.shared
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Perfil de Chrome de cada cuenta").font(.headline)
+            Text("Las ligas que abres desde una sesión, y las ventanas de Chrome nuevas de sus grupos, se abren en el perfil de su cuenta.")
+                .font(.caption).foregroundStyle(.secondary)
+            if chrome.profiles.isEmpty {
+                Text("No encontré perfiles de Chrome en esta Mac.").font(.caption).foregroundStyle(.secondary)
+            }
+            ForEach(engine.profiles) { profile in
+                let account = profile.id.uuidString
+                HStack {
+                    Circle().fill(profile.tint).frame(width: 8, height: 8)
+                    Text(profile.name).frame(width: 120, alignment: .leading)
+                    Picker("", selection: Binding(get: { chrome.choice(for: account) ?? "auto" },
+                                                  set: { chrome.set($0 == "auto" ? nil : $0, for: account) })) {
+                        Text("Automático" + (chrome.profile(for: account).map { " (\($0.label))" } ?? "")).tag("auto")
+                        Text("El último que usé").tag("")
+                        ForEach(chrome.profiles) { Text($0.label).tag($0.directory) }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 380)
+                }
+            }
+        }
+        .onAppear { chrome.reload() }
     }
 }

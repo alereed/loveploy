@@ -76,3 +76,15 @@ final class PreviewPaneTests: XCTestCase {
         XCTAssertEqual(decoded, pane)
     }
 }
+
+final class ChromeProfileTests: XCTestCase {
+    func testReadsAndMatchesProfiles() {
+        let json = #"{"profile":{"profiles_order":["Default","Profile 2","Profile 5"],"info_cache":{"Default":{"name":"Alejandro","user_name":"reed@blender.mx"},"Profile 2":{"name":"Alejandro","user_name":"ale@inkre.mx"},"Profile 5":{"name":"Key","user_name":""}}}}"#
+        let profiles = ChromeProfile.parse(localState: Data(json.utf8))
+        XCTAssertEqual(profiles.map(\.directory), ["Default", "Profile 2", "Profile 5"])
+        XCTAssertEqual(profiles[1].label, "Alejandro · ale@inkre.mx")
+        XCTAssertEqual(ChromeProfile.guess(for: "INKRE", in: profiles)?.directory, "Profile 2")
+        XCTAssertEqual(ChromeProfile.guess(for: "BLENDER", in: profiles)?.directory, "Default")
+        XCTAssertNil(ChromeProfile.guess(for: "Personal", in: profiles))
+    }
+}

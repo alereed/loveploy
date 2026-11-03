@@ -599,7 +599,12 @@ final class PaneHosts: ObservableObject {
                 // Only sessions that can be resumed, and never while Claude Code is writing.
                 guard let terminal = view as? TrackedTerminal, terminal.process?.running == true,
                       pane.sessionID != nil, !pane.startsNew else { continue }
-                let idle = now.timeIntervalSince(terminal.lastUse)
+                // Idle = you haven't typed in it for the limit, and Claude isn't working: by its
+                // hooks when the session has them, else nothing printed for two minutes.
+                let state = MessageQueues.shared.hookState(pane.id)
+                let working = state.map { $0 == .working || $0 == .needsYou } ?? (now.timeIntervalSince(terminal.lastOutput) < 120)
+                guard !working else { continue }
+                let idle = now.timeIntervalSince(terminal.lastInput)
                 if (force && idle > 120) || (terminalLimit > 0 && idle > Double(terminalLimit)) { sleep(pane.id) }
             case .chrome:
                 continue
@@ -655,6 +660,8 @@ final class PaneHosts: ObservableObject {
         web.customUserAgent = LovableWeb.userAgent
         web.allowsBackForwardNavigationGestures = true
         let popups = WebPopups()
+        popups.account = pane.account
+        popups.keepsLinks = pane.kind == .preview
         self.popups.append(popups)
         web.uiDelegate = popups
         web.navigationDelegate = popups
@@ -675,15 +682,19 @@ final class PaneHosts: ObservableObject {
 
 /// A terminal that knows when it was last used (typed into, or written to by Claude Code).
 final class TrackedTerminal: LocalProcessTerminalView {
-    private(set) var lastUse = Date()
+    /// When you last typed into it.
+    private(set) var lastInput = Date()
+    /// When it last printed something (Claude Code redraws now and then even when idle).
+    private(set) var lastOutput = Date()
+    var lastUse: Date { max(lastInput, lastOutput) }
 
     override func dataReceived(slice: ArraySlice<UInt8>) {
-        lastUse = Date()
+        lastOutput = Date()
         super.dataReceived(slice: slice)
     }
 
     override func send(source: TerminalView, data: ArraySlice<UInt8>) {
-        lastUse = Date()
+        lastInput = Date()
         super.send(source: source, data: data)
     }
 }
@@ -754,7 +765,26 @@ final class WebPopups: NSObject, WKUIDelegate, WKNavigationDelegate, WKDownloadD
     private var windows: [NSWindow] = []
     private var destinations: [ObjectIdentifier: URL] = [:]
 
+    /// The pane's account: links that leave claude.ai open in its Chrome profile.
+    var account: String?
+    /// Preview panes keep navigating inside themselves.
+    var keepsLinks = false
+
+    /// Sign-in pages stay in Blender Play (their popup reports back to the page); anything else
+    /// a page opens in a new window goes to Chrome, in the account's profile.
+    static func isSignIn(_ url: URL?) -> Bool {
+        guard let host = url?.host?.lowercased() else { return true }
+        let hosts = ["accounts.google.com", "appleid.apple.com", "login.microsoftonline.com", "github.com/login"]
+        return hosts.contains { host == $0 || host.hasSuffix("." + $0) } || url!.path.contains("oauth") || url!.path.contains("login")
+            || host.hasSuffix("claude.ai") || host.hasSuffix("anthropic.com") || url!.absoluteString == "about:blank"
+    }
+
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        if let url = navigationAction.request.url, !Self.isSignIn(url),
+           NSWorkspace.shared.urlForApplication(withBundleIdentifier: ChromeBridge.bundleID) != nil {
+            ChromeBridge.open(url.absoluteString, account: account)
+            return nil
+        }
         let popup = WKWebView(frame: NSRect(x: 0, y: 0, width: 480, height: 640), configuration: configuration)
         popup.customUserAgent = LovableWeb.userAgent
         popup.uiDelegate = self
@@ -805,7 +835,15 @@ final class WebPopups: NSObject, WKUIDelegate, WKNavigationDelegate, WKDownloadD
     // MARK: Downloads
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction) async -> WKNavigationActionPolicy {
-        navigationAction.shouldPerformDownload ? .download : .allow
+        if navigationAction.shouldPerformDownload { return .download }
+        // A clicked link to another site, from a claude.ai pane: to Chrome, in the account's profile.
+        if !keepsLinks, navigationAction.navigationType == .linkActivated, navigationAction.targetFrame?.isMainFrame ?? true,
+           let url = navigationAction.request.url, !Self.isSignIn(url),
+           NSWorkspace.shared.urlForApplication(withBundleIdentifier: ChromeBridge.bundleID) != nil {
+            ChromeBridge.open(url.absoluteString, account: account)
+            return .cancel
+        }
+        return .allow
     }
 
     func webView(_ webView: WKWebView, decidePolicyFor navigationResponse: WKNavigationResponse) async -> WKNavigationResponsePolicy {
@@ -1118,7 +1156,11 @@ struct PaneCell: View {
     private func openOutside() {
         switch pane.kind {
         case .cloud, .preview:
-            if let url = pane.url.flatMap(URL.init(string:)) { NSWorkspace.shared.open(url) }
+            if let url = pane.url {
+                if NSWorkspace.shared.urlForApplication(withBundleIdentifier: ChromeBridge.bundleID) != nil {
+                    ChromeBridge.open(url, account: pane.account)
+                } else if let link = URL(string: url) { NSWorkspace.shared.open(link) }
+            }
         case .chrome:
             if let url = pane.url.flatMap(URL.init(string:)),
                let chrome = NSWorkspace.shared.urlForApplication(withBundleIdentifier: ChromeBridge.bundleID) {

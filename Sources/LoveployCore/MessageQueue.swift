@@ -154,12 +154,15 @@ public struct ChromeShortcut: Codable, Hashable, Identifiable, Sendable {
     public var name: String
     public var url: String
     public var shortcut: GroupShortcut?
+    /// The Chrome profile to open it in when it isn't open ("Profile 2"); nil: Chrome's last.
+    public var profile: String?
 
-    public init(id: UUID = UUID(), name: String, url: String, shortcut: GroupShortcut? = nil) {
+    public init(id: UUID = UUID(), name: String, url: String, shortcut: GroupShortcut? = nil, profile: String? = nil) {
         self.id = id
         self.name = name
         self.url = url
         self.shortcut = shortcut
+        self.profile = profile
     }
 
     /// The part of the address that identifies the page: scheme, host and path, without the
@@ -169,5 +172,48 @@ public struct ChromeShortcut: Codable, Hashable, Identifiable, Sendable {
         parts.query = nil
         parts.fragment = nil
         return parts.string ?? url
+    }
+}
+
+/// A Chrome profile ("Alejandro (blender.mx)"), as Chrome lists them in its Local State file.
+public struct ChromeProfile: Hashable, Sendable, Identifiable {
+    /// The folder name Chrome uses ("Default", "Profile 3"), what `--profile-directory` takes.
+    public let directory: String
+    public let name: String
+    public let email: String
+    public var id: String { directory }
+
+    public init(directory: String, name: String, email: String) {
+        self.directory = directory
+        self.name = name
+        self.email = email
+    }
+
+    public var label: String { email.isEmpty || name.contains(email) ? name : "\(name) · \(email)" }
+
+    /// Profiles from Chrome's `Local State` JSON, in Chrome's menu order.
+    public static func parse(localState: Data) -> [ChromeProfile] {
+        guard let object = try? JSONSerialization.jsonObject(with: localState) as? [String: Any],
+              let profile = object["profile"] as? [String: Any],
+              let cache = profile["info_cache"] as? [String: [String: Any]] else { return [] }
+        let order = (profile["profiles_order"] as? [String]) ?? cache.keys.sorted()
+        return order.compactMap { dir in
+            guard let info = cache[dir] else { return nil }
+            return ChromeProfile(directory: dir, name: info["name"] as? String ?? dir, email: info["user_name"] as? String ?? "")
+        }
+    }
+
+    /// The profile that looks like an account named `account` ("BLENDER" → the blender.mx
+    /// profile): its name or email domain contains the account's name.
+    public static func guess(for account: String, in profiles: [ChromeProfile]) -> ChromeProfile? {
+        let key = account.lowercased().filter { $0.isLetter || $0.isNumber }
+        guard key.count >= 3 else { return nil }
+        func normalized(_ s: String) -> String { s.lowercased().filter { $0.isLetter || $0.isNumber } }
+        let byEmail = profiles.filter { profile in
+            let domain = profile.email.split(separator: "@").last.map(String.init) ?? ""
+            return normalized(domain).hasPrefix(key) || normalized(domain).contains(key)
+        }
+        if let first = byEmail.first { return first }
+        return profiles.first { normalized($0.name).contains(key) }
     }
 }

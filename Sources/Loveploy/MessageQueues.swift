@@ -174,6 +174,15 @@ final class MessageQueues: ObservableObject {
         (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
     }
 
+    /// What Claude Code's hooks say about a terminal pane; nil when its session has sent none
+    /// (started before Blender Play passed hooks).
+    func hookState(_ pane: UUID) -> WorkState? {
+        let dir = Self.hookDirectory
+        let any = ClaudeHooks.Event.allCases.contains { modified(ClaudeHooks.file($0, pane: pane, in: dir)) != nil }
+        guard any, launched[pane] != nil else { return nil }
+        return terminalState(pane)
+    }
+
     private func terminalState(_ pane: UUID) -> WorkState {
         let dir = Self.hookDirectory
         let start = launched[pane] ?? .distantPast
@@ -422,9 +431,9 @@ final class ChromeShortcuts: ObservableObject {
     func hotKeys() -> [HotKey.Binding] {
         list.compactMap { item in
             guard let shortcut = item.shortcut, shortcut.isUsable else { return nil }
-            let match = item.match, url = item.url
+            let match = item.match, url = item.url, profile = item.profile
             return HotKey.Binding(key: shortcut.keyCode, mods: shortcut.modifiers) {
-                Task { try? await ChromeBridge.focus(match: match, url: url) }
+                Task { try? await ChromeBridge.focus(match: match, url: url, profile: profile) }
             }
         }
     }
@@ -449,6 +458,9 @@ struct ChromeShortcutsView: View {
             }
             Text("Cada atajo trae al frente la ventana de Chrome que muestra esa página (sus apps instaladas incluidas), en el escritorio donde esté. Si no está abierta, la abre.")
                 .font(.caption).foregroundStyle(.secondary)
+            ChromeProfilesSettings()
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.04)))
             List {
                 ForEach(shortcuts.list) { item in
                     HStack(spacing: 12) {
@@ -458,8 +470,15 @@ struct ChromeShortcutsView: View {
                             Text(item.url).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                         }
                         Spacer()
+                        Picker("", selection: Binding(get: { item.profile ?? "" }, set: { value in shortcuts.update(item.id) { $0.profile = value.isEmpty ? nil : value } })) {
+                            Text("Perfil: el último").tag("")
+                            ForEach(ChromeProfiles.shared.profiles) { Text($0.label).tag($0.directory) }
+                        }
+                        .labelsHidden()
+                        .frame(width: 190)
+                        .help("Si la página no está abierta, se abre en este perfil de Chrome")
                         ShortcutRecorder(current: item.shortcut) { value in shortcuts.update(item.id) { $0.shortcut = value } }
-                        Button("Ir") { Task { try? await ChromeBridge.focus(match: item.match, url: item.url) } }
+                        Button("Ir") { Task { try? await ChromeBridge.focus(match: item.match, url: item.url, profile: item.profile) } }
                         Button { shortcuts.delete(item.id) } label: { Image(systemName: "trash") }.buttonStyle(.borderless)
                     }
                     .padding(.vertical, 3)

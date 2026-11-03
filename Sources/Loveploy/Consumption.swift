@@ -91,21 +91,23 @@ final class PaneActivity: NSObject, WKScriptMessageHandler {
     static let name = "loveployActivity"
     static let script = """
     (function () {
-      var last = 0;
-      function ping() {
+      // "input": you typed, clicked or scrolled (the pane is in use). "content": the page wrote
+      // new text (counts as work time, but doesn't keep the pane from pausing).
+      var last = { input: 0, content: 0 };
+      function ping(kind) {
         var now = Date.now();
-        if (now - last < 60000) return;
-        last = now;
-        try { window.webkit.messageHandlers.\(PaneActivity.name).postMessage(1); } catch (e) {}
+        if (now - last[kind] < 60000) return;
+        last[kind] = now;
+        try { window.webkit.messageHandlers.\(PaneActivity.name).postMessage(kind); } catch (e) {}
       }
-      ['keydown', 'mousedown', 'wheel'].forEach(function (t) { addEventListener(t, ping, true); });
+      ['keydown', 'mousedown', 'wheel'].forEach(function (t) { addEventListener(t, function () { ping('input'); }, true); });
       new MutationObserver(function (records) {
         for (var i = 0; i < records.length; i++) {
           var nodes = records[i].addedNodes;
           for (var j = 0; j < nodes.length; j++) {
-            if ((nodes[j].textContent || '').length >= 30) { ping(); return; }
+            if ((nodes[j].textContent || '').length >= 30) { ping('content'); return; }
           }
-          if (records[i].type === 'characterData' && (records[i].target.data || '').length >= 30) { ping(); return; }
+          if (records[i].type === 'characterData' && (records[i].target.data || '').length >= 30) { ping('content'); return; }
         }
       }).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
     })();
@@ -116,8 +118,10 @@ final class PaneActivity: NSObject, WKScriptMessageHandler {
 
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         let pane = pane
+        let input = (message.body as? String) == "input"
         MainActor.assumeIsolated {
-            PaneUse.touch(pane)
+            // Only your own use keeps a pane from pausing; the page redrawing doesn't.
+            if input { PaneUse.touch(pane) }
             DevClock.shared.record(pane: pane)
         }
     }
