@@ -105,6 +105,17 @@ enum ChromeBridge {
         await MainActor.run { bringForward() }
     }
 
+    /// The front Chrome window's tab: address and title.
+    static func frontTab() async throws -> (url: String, title: String) {
+        guard isRunning else { throw ChromeError.notRunning }
+        let out = try await run("""
+        tell application id "\(bundleID)" to return (URL of active tab of front window) & linefeed & (title of active tab of front window)
+        """)
+        let lines = out.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard let url = lines.first, !url.isEmpty else { throw ChromeError.failed("Chrome no tiene ninguna ventana al frente.") }
+        return (url, lines.count > 1 ? lines[1] : url)
+    }
+
     /// The address in the front Chrome window.
     static func frontURL() async throws -> String {
         guard isRunning else { throw ChromeError.notRunning }

@@ -289,6 +289,11 @@ final class GroupWindowController: NSWindowController, NSWindowDelegate {
         let name = "LoveployGroup-\(groupID.uuidString)"
         if !window.setFrameUsingName(name) { window.center() }
         window.setFrameAutosaveName(name)
+        if MemorySaver.lazy, let group = SessionGroups.shared.group(groupID) {
+            let loadable = group.panes.filter { $0.kind != .chrome }
+            hosts.startAsleep(loadable.dropFirst().map(\.id))
+            hosts.focused = loadable.first?.id
+        }
         startSweeping()
         watchClicks()
     }
@@ -372,7 +377,7 @@ final class GroupWindowController: NSWindowController, NSWindowDelegate {
         // Pages left in the background a long time can stop updating; refresh the quiet ones.
         if let away = awaySince, Date().timeIntervalSince(away) > 15 * 60 { hosts.reloadQuietWeb(olderThan: away) }
         awaySince = nil
-        wakeAll()
+        if !MemorySaver.lazy { wakeAll() }
     }
 
     func wakeAll() {
@@ -388,7 +393,8 @@ final class GroupWindowController: NSWindowController, NSWindowDelegate {
         clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
             MainActor.assumeIsolated {
                 guard let self, event.window === self.window else { return }
-                if !self.hosts.sleeping.isEmpty { self.wakeAll() }
+                // In saving mode only the pane you click wakes (its pause screen handles the click).
+                if !MemorySaver.lazy, !self.hosts.sleeping.isEmpty { self.wakeAll() }
                 // Highlight the pane you clicked in.
                 DispatchQueue.main.async { self.hosts.focused = self.paneWithFocus() }
             }
@@ -527,6 +533,11 @@ final class PaneHosts: ObservableObject {
 
     // MARK: Memory saver
 
+    /// Marks panes as paused before anything loads (opening a group in saving mode).
+    func startAsleep(_ ids: [UUID]) {
+        sleeping.formUnion(ids.filter { views[$0] == nil })
+    }
+
     func sleep(_ id: UUID) {
         guard !sleeping.contains(id) else { return }
         sleeping.insert(id)   // first, so the terminal's exit isn't reported as an ending
@@ -536,6 +547,7 @@ final class PaneHosts: ObservableObject {
 
     func wake(_ id: UUID) {
         guard sleeping.remove(id) != nil else { return }
+        focused = id
         PaneUse.touch(id)
         objectWillChange.send()
     }
@@ -579,7 +591,10 @@ final class PaneHosts: ObservableObject {
             case .cloud, .preview:
                 let away = awaySince.map { now.timeIntervalSince($0) } ?? 0
                 let idle = now.timeIntervalSince(PaneUse.last[pane.id] ?? .distantPast)
-                if force || (webLimit > 0 && away > Double(webLimit) && idle > Double(webLimit)) { sleep(pane.id) }
+                // In saving mode a page you're not using pauses even while you're in its window,
+                // so only the session you're working in stays loaded.
+                let unused = MemorySaver.lazy ? pane.id != self.focused : away > Double(webLimit)
+                if force || (webLimit > 0 && unused && idle > Double(webLimit)) { sleep(pane.id) }
             case .local:
                 // Only sessions that can be resumed, and never while Claude Code is writing.
                 guard let terminal = view as? TrackedTerminal, terminal.process?.running == true,
@@ -682,6 +697,9 @@ enum PaneUse {
 
 /// How long unused panes stay loaded (0 = always).
 enum MemorySaver {
+    /// Groups open with only the first session loaded; each of the others loads when you go
+    /// to it (click or ⌃Tab), and only the one you pick wakes up.
+    static var lazy: Bool { UserDefaults.standard.object(forKey: "loveploy.lazyOpen") as? Bool ?? true }
     static var webMinutes: Int { UserDefaults.standard.object(forKey: "loveploy.sleepWebMinutes") as? Int ?? 10 }
     static var terminalMinutes: Int { UserDefaults.standard.object(forKey: "loveploy.sleepTerminalMinutes") as? Int ?? 30 }
 }
@@ -906,6 +924,13 @@ struct GroupView: View {
             Toggle("Abrir al iniciar", isOn: Binding(get: { group.openAtLaunch }, set: { on in groups.change(groupID) { $0.openAtLaunch = on } }))
                 .toggleStyle(.checkbox)
                 .font(.system(size: 12))
+            if !hosts.sleeping.isEmpty {
+                Button {
+                    for pane in group.panes where hosts.sleeping.contains(pane.id) { hosts.wake(pane.id) }
+                } label: { Label("Despertar \(hosts.sleeping.count)", systemImage: "sun.max") }
+                .font(.system(size: 12))
+                .help("Carga todas las sesiones en pausa de este grupo")
+            }
             Button {
                 groups.freeMemory(groupID)
             } label: { Label("Liberar memoria", systemImage: "moon.zzz") }

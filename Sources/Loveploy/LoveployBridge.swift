@@ -103,6 +103,7 @@ enum LoveployBridge {
         keys.append(.init(key: kVK_ANSI_U, mods: all) { MainWindow.show(.usage) })
         // ⌃⌥⌘Q: what you dictate (or have typed in claude.ai) goes to the pane's queue instead of out.
         keys.append(.init(key: kVK_ANSI_Q, mods: all) { Dictation.shared.queueHotKey() })
+        keys.append(.init(key: kVK_ANSI_K, mods: all) { ChromeShortcuts.shared.addFrontTab() })
         keys += ChromeShortcuts.shared.hotKeys()
         return keys
     }

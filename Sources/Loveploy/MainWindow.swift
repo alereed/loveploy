@@ -336,9 +336,13 @@ struct MemorySaverSettings: View {
     @AppStorage("loveploy.sleepWebMinutes") private var webMinutes = 10
     @AppStorage("loveploy.sleepTerminalMinutes") private var terminalMinutes = 30
     @AppStorage("loveploy.groupsFullScreen") private var fullScreen = true
+    @AppStorage("loveploy.lazyOpen") private var lazy = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+        Toggle("Ahorro al abrir: solo carga la sesión que estás usando (las demás, al ir a ellas con clic o ⌃Tab)", isOn: $lazy)
+            .toggleStyle(.checkbox)
+            .font(.system(size: 12))
         Toggle("Abrir los grupos en pantalla completa", isOn: $fullScreen)
             .toggleStyle(.checkbox)
             .font(.system(size: 12))

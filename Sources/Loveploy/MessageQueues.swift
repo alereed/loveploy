@@ -395,6 +395,30 @@ final class ChromeShortcuts: ObservableObject {
         Engine.shared.updateHotKeys()
     }
 
+    /// ⌃⌥⌘K: gives the Chrome tab in front the next free shortcut, and says which.
+    func addFrontTab() {
+        Task {
+            guard let tabs = try? await ChromeBridge.frontTab() else { NSSound.beep(); return }
+            await MainActor.run {
+                let shortcuts = ChromeShortcuts.shared
+                if let existing = shortcuts.list.first(where: { $0.url == tabs.url }) {
+                    Self.tell("«\(existing.name)» ya tiene \(existing.shortcut?.display ?? "atajo").")
+                    return
+                }
+                shortcuts.add(name: tabs.title, url: tabs.url)
+                let added = shortcuts.list.last
+                Self.tell("«\(added?.name ?? tabs.title)» ahora se abre con \(added?.shortcut?.display ?? "un atajo"). Puedes cambiarlo en Atajos de Chrome.")
+            }
+        }
+    }
+
+    static func tell(_ body: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Atajo de Chrome"
+        content.body = body
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+    }
+
     func hotKeys() -> [HotKey.Binding] {
         list.compactMap { item in
             guard let shortcut = item.shortcut, shortcut.isUsable else { return nil }
