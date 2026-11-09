@@ -298,6 +298,7 @@ final class GroupWindowController: NSWindowController, NSWindowDelegate {
             let loadable = group.panes.filter { $0.kind != .chrome }
             hosts.startAsleep(loadable.dropFirst().map(\.id))
             hosts.focused = loadable.first?.id
+            hosts.expanded = Set(loadable.prefix(1).map(\.id))
         }
         startSweeping()
         watchClicks()
@@ -323,21 +324,26 @@ final class GroupWindowController: NSWindowController, NSWindowDelegate {
     func applyFocusLayout() {
         guard let root = window?.contentView, let group = SessionGroups.shared.group(groupID), group.focusMode,
               group.panes.count > 1 else { return }
-        guard let id = hosts.focused ?? group.panes.first?.id, let anchor = hosts.anchors[id]?.view else { return }
-        Self.focus(root, on: anchor)
+        if hosts.expanded.isEmpty, let first = hosts.focused ?? group.panes.first?.id { hosts.expanded = [first] }
+        let anchors = hosts.expanded.compactMap { hosts.anchors[$0]?.view }
+        guard !anchors.isEmpty else { return }
+        Self.focus(root, on: anchors)
     }
 
     private static let strip: CGFloat = 38
 
-    private static func focus(_ view: NSView, on anchor: NSView) {
+    private static func focus(_ view: NSView, on anchors: [NSView]) {
         if let split = view as? NSSplitView {
             let panes = split.arrangedSubviews.filter { !$0.isHidden }
             if panes.count > 1 {
                 let total = split.isVertical ? split.bounds.width : split.bounds.height
                 let gaps = CGFloat(panes.count - 1) * split.dividerThickness
-                if let active = panes.firstIndex(where: { anchor === $0 || anchor.isDescendant(of: $0) }) {
+                let open = panes.indices.filter { index in anchors.contains { $0 === panes[index] || $0.isDescendant(of: panes[index]) } }
+                if !open.isEmpty {
+                    // The open panes share what the strips leave.
                     var sizes = Array(repeating: strip, count: panes.count)
-                    sizes[active] = max(strip, total - gaps - strip * CGFloat(panes.count - 1))
+                    let share = max(strip, (total - gaps - strip * CGFloat(panes.count - open.count)) / CGFloat(open.count))
+                    for index in open { sizes[index] = share }
                     var position: CGFloat = 0
                     for index in 0..<(panes.count - 1) {
                         position += sizes[index]
@@ -353,7 +359,7 @@ final class GroupWindowController: NSWindowController, NSWindowDelegate {
                 split.layoutSubtreeIfNeeded()
             }
         }
-        for child in view.subviews { focus(child, on: anchor) }
+        for child in view.subviews { focus(child, on: anchors) }
     }
 
     /// Splits every row and column of the window evenly, outermost first.
@@ -476,6 +482,7 @@ final class GroupWindowController: NSWindowController, NSWindowDelegate {
         let current = (hosts.focused ?? paneWithFocus()).flatMap { id in panes.firstIndex { $0.id == id } }
         let next = panes[((current ?? (step > 0 ? -1 : 0)) + step + panes.count) % panes.count]
         if hosts.sleeping.contains(next.id) { hosts.wake(next.id) }
+        hosts.expanded.insert(next.id)
         hosts.focused = next.id
         if SessionGroups.shared.group(groupID)?.focusMode == true { applyFocusLayout() }
         // The view may only exist after the wake; give SwiftUI a moment to place it.
@@ -536,12 +543,28 @@ final class PaneHosts: ObservableObject {
     }
     /// Called when the active pane changes (focus mode resizes the window around it).
     var onFocus: (() -> Void)?
+    /// Shrinks an open pane back to a strip and pauses it to free memory, unless Claude is
+    /// working in it or it has queued messages (then it only shrinks).
+    func collapse(_ id: UUID, kind: SessionPane.Kind) {
+        expanded.remove(id)
+        if focused == id { focused = expanded.first }
+        let busy = MessageQueues.shared.hasPending(id)
+            || [.working, .needsYou].contains(MessageQueues.shared.hookState(id) ?? .free)
+        if !busy && kind != .chrome { sleep(id) }
+    }
+
     /// Each pane's cell in the window, to find it in the split views.
     var anchors: [UUID: WeakAnchor] = [:]
     final class WeakAnchor { weak var view: NSView?; init(_ view: NSView) { self.view = view } }
 
-    /// Makes a pane the active one: wakes it, gives it the space and the keyboard.
+    /// Focus mode: the panes shown large (the rest are strips). Several can be open at once.
+    @Published var expanded: Set<UUID> = [] {
+        didSet { if expanded != oldValue { onFocus?() } }
+    }
+
+    /// Opens a strip: it wakes, grows and gets the keyboard; the other open panes stay open.
     func activate(_ id: UUID) {
+        expanded.insert(id)
         if sleeping.contains(id) { wake(id) }
         focused = id
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
@@ -662,7 +685,7 @@ final class PaneHosts: ObservableObject {
                 let idle = now.timeIntervalSince(PaneUse.last[pane.id] ?? .distantPast)
                 // In saving mode a page you're not using pauses even while you're in its window,
                 // so only the session you're working in stays loaded.
-                let unused = MemorySaver.lazy ? pane.id != self.focused : away > Double(webLimit)
+                let unused = MemorySaver.lazy ? (pane.id != self.focused && !self.expanded.contains(pane.id)) : away > Double(webLimit)
                 if force || (webLimit > 0 && unused && idle > Double(webLimit)) { sleep(pane.id) }
             case .local:
                 // Only sessions that can be resumed, and never while Claude Code is writing.
@@ -1084,7 +1107,10 @@ struct GroupView: View {
                 .font(.system(size: 12))
             if !hosts.sleeping.isEmpty {
                 Button {
-                    for pane in group.panes where hosts.sleeping.contains(pane.id) { hosts.wake(pane.id) }
+                    for pane in group.panes where hosts.sleeping.contains(pane.id) {
+                        hosts.wake(pane.id)
+                        if group.focusMode { hosts.expanded.insert(pane.id) }
+                    }
                 } label: { Label("Despertar \(hosts.sleeping.count)", systemImage: "sun.max") }
                 .font(.system(size: 12))
                 .help("Carga todas las sesiones en pausa de este grupo")
@@ -1203,9 +1229,9 @@ struct PaneCell: View {
 
     var body: some View {
         GeometryReader { proxy in
-            // In focus mode the sessions you're not on shrink to a strip; a click makes one active.
-            if focusMode && count > 1 && (proxy.size.width < 110 || proxy.size.height < 90) {
-                CollapsedPane(pane: pane, vertical: proxy.size.width < 110) { hosts.activate(pane.id) }
+            // In focus mode the sessions you closed are strips; a click opens one again.
+            if focusMode && count > 1 && (!hosts.expanded.contains(pane.id) || proxy.size.width < 110 || proxy.size.height < 90) {
+                CollapsedPane(pane: pane, vertical: proxy.size.width < proxy.size.height) { hosts.activate(pane.id) }
             } else {
                 full
             }
@@ -1262,6 +1288,11 @@ struct PaneCell: View {
                 var changed = pane
                 changed.project = project
                 SessionGroups.shared.change(groupID) { $0.replace(changed) }
+            }
+            if focusMode && count > 1 {
+                Button { hosts.collapse(pane.id, kind: pane.kind) } label: { Image(systemName: "arrow.down.right.and.arrow.up.left") }
+                    .disabled(hosts.expanded.count <= 1 && hosts.expanded.contains(pane.id))
+                    .help("Apagar: comprimir a tira y pausarla (vuelve con un clic)")
             }
             Button { SessionGroups.shared.change(groupID) { $0.move(pane.id, by: -1) } } label: { Image(systemName: "chevron.left") }
                 .disabled(index == 0)
