@@ -52,7 +52,7 @@ final class SessionGroups: ObservableObject {
         windows[id]?.window?.title = groups[index].name
         // A new arrangement starts evenly split.
         if before.0 != groups[index].layout || before.1 != groups[index].panes.map(\.id) {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.equalize(id) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.windows[id]?.arrange() }
         }
     }
 
@@ -103,6 +103,8 @@ final class SessionGroups: ObservableObject {
 
     /// Pauses every pane of the group you're not using right now.
     func freeMemory(_ id: UUID) { windows[id]?.sweep(force: true) }
+
+    func arrangeWindow(_ id: UUID) { windows[id]?.arrange() }
 
     /// Every pane of the group's window the same width (and the same height in each column).
     func equalize(_ id: UUID) {
@@ -175,7 +177,7 @@ final class SessionGroups: ObservableObject {
         NSApp.activate()
         controller.showWindow(nil)
         controller.enterFullScreenIfWanted()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { controller.equalize() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { controller.arrange() }
     }
 
     func openAll() { groups.forEach { open($0.id) } }
@@ -289,6 +291,9 @@ final class GroupWindowController: NSWindowController, NSWindowDelegate {
         let name = "LoveployGroup-\(groupID.uuidString)"
         if !window.setFrameUsingName(name) { window.center() }
         window.setFrameAutosaveName(name)
+        hosts.onFocus = { [weak self] in
+            DispatchQueue.main.async { self?.applyFocusLayout() }
+        }
         if MemorySaver.lazy, let group = SessionGroups.shared.group(groupID) {
             let loadable = group.panes.filter { $0.kind != .chrome }
             hosts.startAsleep(loadable.dropFirst().map(\.id))
@@ -312,6 +317,43 @@ final class GroupWindowController: NSWindowController, NSWindowDelegate {
         alert.addButton(withTitle: "Cerrar")
         alert.addButton(withTitle: "Cancelar")
         return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// Focus mode: the active pane gets the window, the others a strip about 1 cm wide.
+    func applyFocusLayout() {
+        guard let root = window?.contentView, let group = SessionGroups.shared.group(groupID), group.focusMode,
+              group.panes.count > 1 else { return }
+        guard let id = hosts.focused ?? group.panes.first?.id, let anchor = hosts.anchors[id]?.view else { return }
+        Self.focus(root, on: anchor)
+    }
+
+    private static let strip: CGFloat = 38
+
+    private static func focus(_ view: NSView, on anchor: NSView) {
+        if let split = view as? NSSplitView {
+            let panes = split.arrangedSubviews.filter { !$0.isHidden }
+            if panes.count > 1 {
+                let total = split.isVertical ? split.bounds.width : split.bounds.height
+                let gaps = CGFloat(panes.count - 1) * split.dividerThickness
+                if let active = panes.firstIndex(where: { anchor === $0 || anchor.isDescendant(of: $0) }) {
+                    var sizes = Array(repeating: strip, count: panes.count)
+                    sizes[active] = max(strip, total - gaps - strip * CGFloat(panes.count - 1))
+                    var position: CGFloat = 0
+                    for index in 0..<(panes.count - 1) {
+                        position += sizes[index]
+                        split.setPosition(position + CGFloat(index) * split.dividerThickness, ofDividerAt: index)
+                    }
+                } else {
+                    // A row without the active pane: its strips share it evenly.
+                    let size = (total - gaps) / CGFloat(panes.count)
+                    for index in 0..<(panes.count - 1) {
+                        split.setPosition(CGFloat(index + 1) * size + CGFloat(index) * split.dividerThickness, ofDividerAt: index)
+                    }
+                }
+                split.layoutSubtreeIfNeeded()
+            }
+        }
+        for child in view.subviews { focus(child, on: anchor) }
     }
 
     /// Splits every row and column of the window evenly, outermost first.
@@ -368,8 +410,13 @@ final class GroupWindowController: NSWindowController, NSWindowDelegate {
         }
     }
 
-    func windowDidEnterFullScreen(_ notification: Notification) { equalize() }
-    func windowDidExitFullScreen(_ notification: Notification) { equalize() }
+    func windowDidEnterFullScreen(_ notification: Notification) { arrange() }
+    func windowDidExitFullScreen(_ notification: Notification) { arrange() }
+
+    /// Even split, or the active pane large in focus mode.
+    func arrange() {
+        if SessionGroups.shared.group(groupID)?.focusMode == true { applyFocusLayout() } else { equalize() }
+    }
 
         func windowDidResignKey(_ notification: Notification) { awaySince = Date() }
 
@@ -430,6 +477,7 @@ final class GroupWindowController: NSWindowController, NSWindowDelegate {
         let next = panes[((current ?? (step > 0 ? -1 : 0)) + step + panes.count) % panes.count]
         if hosts.sleeping.contains(next.id) { hosts.wake(next.id) }
         hosts.focused = next.id
+        if SessionGroups.shared.group(groupID)?.focusMode == true { applyFocusLayout() }
         // The view may only exist after the wake; give SwiftUI a moment to place it.
         DispatchQueue.main.async { [weak self] in
             guard let self, let view = self.hosts.existingView(next.id) else { return }
@@ -442,7 +490,10 @@ final class GroupWindowController: NSWindowController, NSWindowDelegate {
     private var follow: DispatchWorkItem?
 
     func windowDidMove(_ notification: Notification) { followChrome() }
-    func windowDidEndLiveResize(_ notification: Notification) { followChrome() }
+    func windowDidEndLiveResize(_ notification: Notification) {
+        if SessionGroups.shared.group(groupID)?.focusMode == true { applyFocusLayout() }
+        followChrome()
+    }
     func windowDidMiniaturize(_ notification: Notification) { hosts.suspendWeb() }
     func windowDidDeminiaturize(_ notification: Notification) {
         hosts.resume()
@@ -480,7 +531,25 @@ final class PaneHosts: ObservableObject {
     /// return to the window).
     @Published private(set) var sleeping: Set<UUID> = []
     /// The pane last moved to or clicked in, outlined in the window.
-    @Published var focused: UUID?
+    @Published var focused: UUID? {
+        didSet { if focused != oldValue { onFocus?() } }
+    }
+    /// Called when the active pane changes (focus mode resizes the window around it).
+    var onFocus: (() -> Void)?
+    /// Each pane's cell in the window, to find it in the split views.
+    var anchors: [UUID: WeakAnchor] = [:]
+    final class WeakAnchor { weak var view: NSView?; init(_ view: NSView) { self.view = view } }
+
+    /// Makes a pane the active one: wakes it, gives it the space and the keyboard.
+    func activate(_ id: UUID) {
+        if sleeping.contains(id) { wake(id) }
+        focused = id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            guard let view = self?.existingView(id) else { return }
+            view.window?.makeFirstResponder(view)
+            if let web = view as? WKWebView { web.evaluateJavaScript(Dictation.focusComposer) }
+        }
+    }
     private var views: [UUID: NSView] = [:]
     private var observers: [UUID: TerminalObserver] = [:]
     private var popups: [WebPopups] = []
@@ -735,6 +804,57 @@ struct SleepingPaneView: View {
     }
 }
 
+/// Marks where a pane's cell is in the window, so focus mode can find its split view.
+struct PaneAnchor: NSViewRepresentable {
+    let paneID: UUID
+    let hosts: PaneHosts
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        hosts.anchors[paneID] = PaneHosts.WeakAnchor(view)
+        return view
+    }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        hosts.anchors[paneID] = PaneHosts.WeakAnchor(view)
+    }
+}
+
+/// A session shrunk to a strip in focus mode: its color, icon and name; a click makes it active.
+struct CollapsedPane: View {
+    let pane: SessionPane
+    let vertical: Bool
+    let activate: () -> Void
+    @ObservedObject private var queues = MessageQueues.shared
+
+    var body: some View {
+        let tint = Accounts.tint(pane.account)
+        let layout = vertical ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 8))
+        layout {
+            Circle().fill(tint).frame(width: 8, height: 8)
+            Image(systemName: pane.kind == .local ? "terminal" : pane.kind == .preview ? "eye" : "globe")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+            if queues.hasPending(pane.id) {
+                Image(systemName: "list.number").font(.system(size: 10)).foregroundStyle(Color.accentColor)
+            }
+            Text(pane.title)
+                .font(.system(size: 12, weight: .medium))
+                .lineLimit(1)
+                .fixedSize()
+                .rotationEffect(vertical ? .degrees(90) : .zero)
+                .frame(width: vertical ? 20 : nil, height: vertical ? 160 : nil)
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, vertical ? 10 : 0)
+        .padding(.horizontal, vertical ? 0 : 10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(tint.opacity(0.14))
+        .contentShape(Rectangle())
+        .onTapGesture(perform: activate)
+        .help("\(pane.title) — clic para hacerla la sesión activa")
+    }
+}
+
 /// Reports a terminal's process ending back to its pane.
 final class TerminalObserver: NSObject, LocalProcessTerminalViewDelegate {
     let paneID: UUID
@@ -974,6 +1094,13 @@ struct GroupView: View {
             } label: { Label("Liberar memoria", systemImage: "moon.zzz") }
             .font(.system(size: 12))
             .help("Pone en pausa los paneles que no estás usando; vuelven con un clic")
+            Toggle(isOn: Binding(get: { group.focusMode }, set: { on in
+                groups.change(groupID) { $0.focusMode = on }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { groups.arrangeWindow(groupID) }
+            })) { Label("Enfocar", systemImage: "rectangle.righthalf.inset.filled") }
+            .toggleStyle(.button)
+            .font(.system(size: 12))
+            .help("La sesión activa ocupa casi toda la ventana; las demás quedan como tiras de ~1 cm que activas con un clic o ⌃Tab")
             Button {
                 groups.equalize(groupID)
             } label: { Label("Igualar", systemImage: "equal.square") }
@@ -1072,7 +1199,27 @@ struct PaneCell: View {
     let count: Int
     @ObservedObject var hosts: PaneHosts
 
+    private var focusMode: Bool { SessionGroups.shared.group(groupID)?.focusMode ?? false }
+
     var body: some View {
+        GeometryReader { proxy in
+            // In focus mode the sessions you're not on shrink to a strip; a click makes one active.
+            if focusMode && count > 1 && (proxy.size.width < 110 || proxy.size.height < 90) {
+                CollapsedPane(pane: pane, vertical: proxy.size.width < 110) { hosts.activate(pane.id) }
+            } else {
+                full
+            }
+        }
+        .background(PaneAnchor(paneID: pane.id, hosts: hosts))
+        .frame(minWidth: focusMode ? 34 : 220, minHeight: focusMode ? 30 : 160)
+        .overlay(
+            RoundedRectangle(cornerRadius: 2)
+                .stroke(Color.accentColor, lineWidth: hosts.focused == pane.id && count > 1 ? 2 : 0)
+                .allowsHitTesting(false)
+        )
+    }
+
+    private var full: some View {
         VStack(spacing: 0) {
             header
             ZStack {
@@ -1099,12 +1246,6 @@ struct PaneCell: View {
                 }
             }
         }
-        .frame(minWidth: 220, minHeight: 160)
-        .overlay(
-            RoundedRectangle(cornerRadius: 2)
-                .stroke(Color.accentColor, lineWidth: hosts.focused == pane.id && count > 1 ? 2 : 0)
-                .allowsHitTesting(false)
-        )
     }
 
     private var header: some View {

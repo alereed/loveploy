@@ -268,9 +268,13 @@ public struct SessionGroup: Codable, Identifiable, Hashable, Sendable {
     public var shortcut: GroupShortcut?
     /// The billing project for panes that don't name their own.
     public var project: UUID?
+    /// The active session takes most of the window; the others shrink to thin strips you can
+    /// click to make active.
+    public var focusMode: Bool
 
-    public init(id: UUID = UUID(), name: String, panes: [SessionPane] = [], layout: PaneLayout = .grid, openAtLaunch: Bool = false, shortcut: GroupShortcut? = nil, project: UUID? = nil) {
+    public init(id: UUID = UUID(), name: String, panes: [SessionPane] = [], layout: PaneLayout = .grid, openAtLaunch: Bool = false, shortcut: GroupShortcut? = nil, project: UUID? = nil, focusMode: Bool = true) {
         self.project = project
+        self.focusMode = focusMode
         self.id = id
         self.name = name
         self.panes = Array(panes.prefix(Self.maxPanes))
@@ -308,7 +312,7 @@ public struct SessionGroup: Codable, Identifiable, Hashable, Sendable {
         panes.swapAt(index, target)
     }
 
-    enum CodingKeys: String, CodingKey { case id, name, panes, layout, openAtLaunch, shortcut, project }
+    enum CodingKeys: String, CodingKey { case id, name, panes, layout, openAtLaunch, shortcut, project, focusMode }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -319,6 +323,7 @@ public struct SessionGroup: Codable, Identifiable, Hashable, Sendable {
         openAtLaunch = (try? c.decodeIfPresent(Bool.self, forKey: .openAtLaunch)) ?? false
         shortcut = try? c.decodeIfPresent(GroupShortcut.self, forKey: .shortcut)
         project = try? c.decodeIfPresent(UUID.self, forKey: .project)
+        focusMode = (try? c.decodeIfPresent(Bool.self, forKey: .focusMode)) ?? true
     }
 }
 
