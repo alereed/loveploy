@@ -5418,6 +5418,16 @@ if args.count == 3, args[1] == "--export-iconset" {
     exit(0)
 }
 
+// Loveploy: proves on a real Mac that pausing sessions frees their memory (CI runs it).
+if args.count == 2, args[1] == "--selftest-memory" {
+    MainActor.assumeIsolated {
+        let app = NSApplication.shared
+        app.setActivationPolicy(.accessory)
+        MemorySelfTest.run()
+        app.run()
+    }
+}
+
 MainActor.assumeIsolated {
     let app = NSApplication.shared
     let delegate = AppDelegate()

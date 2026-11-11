@@ -37,6 +37,10 @@ jobs:
           echo "SIGN_IDENTITY=$IDENTITY" >> "$GITHUB_ENV"
       - name: Build Blender Play.app
         run: scripts/build-app.sh
+      # On this real Mac: load pages and a terminal with helper processes, pause them, and
+      # check their processes are gone and their memory was returned.
+      - name: Memory self-test
+        run: '"dist/Blender Play.app/Contents/MacOS/Loveploy" --selftest-memory'
       - uses: actions/upload-artifact@v4
         with:
           name: BlenderPlay

@@ -266,3 +266,106 @@ struct MemoryView: View {
         }
     }
 }
+
+// MARK: - Self-test (run by CI on a real Mac)
+
+/// `Loveploy --selftest-memory`: loads real panes (three web pages, and a terminal whose
+/// "Claude Code" starts helper processes like MCP servers), picks what to pause with the same
+/// policy the guard uses, pauses them, and checks on the live system that their processes are
+/// gone, the helpers were reaped, the memory was returned, and the pane left loaded is intact.
+@MainActor
+enum MemorySelfTest {
+    private static var hosts: PaneHosts?
+
+    static func run() {
+        Task { @MainActor in
+            let ok = await test()
+            print(ok ? "SELFTEST PASS" : "SELFTEST FAIL")
+            exit(ok ? 0 : 1)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 120) {
+            print("SELFTEST FAIL: timed out")
+            exit(2)
+        }
+    }
+
+    private static func alive(_ pid: Int32, in table: ProcessTable) -> Bool { table.memoryKB[pid] != nil }
+
+    private static func pause(_ seconds: Double) async {
+        try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
+    }
+
+    private static func test() async -> Bool {
+        var ok = true
+        func check(_ condition: Bool, _ what: String) {
+            print(condition ? "PASS" : "FAIL", what)
+            ok = ok && condition
+        }
+
+        // A stand-in for Claude Code: starts two helpers (as it does with MCP servers), then stays.
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("bp-selftest-\(UUID().uuidString)")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let fake = dir.appendingPathComponent("claude")
+        try? "#!/bin/sh\nsleep 600 &\nsleep 600 &\nexec sleep 600\n".write(to: fake, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
+        setenv("PATH", dir.path + ":" + (ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"), 1)
+
+        let hosts = PaneHosts()
+        self.hosts = hosts
+        let terminal = SessionPane(kind: .local, title: "terminal", sessionID: "selftest", directory: dir.path)
+        let pages = (0..<3).map { SessionPane(kind: .cloud, title: "page \($0)", url: "data:text/html,<h1>Blender%20Play%20\($0)</h1>") }
+        let all = [terminal] + pages
+        for pane in all {
+            _ = hosts.view(for: pane)
+            await pause(0.4)
+        }
+        await pause(7)
+
+        guard let before = MemoryGuard.processTable() else { print("FAIL ps"); return false }
+        var pids: [UUID: Int32] = [:]
+        for pane in all {
+            let pid = hosts.processID(pane.id)
+            check(pid != nil && alive(pid ?? -1, in: before), "\(pane.title): loaded with its own process (pid \(pid ?? 0))")
+            pids[pane.id] = pid
+        }
+        guard ok, let shell = pids[terminal.id] else { return false }
+        let helpers = before.descendants(of: shell)
+        check(helpers.count >= 2, "terminal: Claude Code's helpers are running (\(helpers.count))")
+        check(Set(pages.compactMap { pids[$0.id] }).count == pages.count, "each page has a separate WebKit process")
+        var bytes: [UUID: Int] = [:]
+        for pane in all { bytes[pane.id] = before.treeBytes(root: pids[pane.id] ?? -1) }
+        for pane in all { print("     \(pane.title): \(MemoryPolicy.format(bytes[pane.id] ?? 0)), \(before.treeCount(root: pids[pane.id] ?? -1)) process(es)") }
+        check(all.allSatisfy { (bytes[$0.id] ?? 0) > 0 }, "every pane's memory is measured")
+
+        // The guard's own rule: keep 1 loaded, pause the ones used longest ago.
+        let loaded = all.map { LoadedPane(id: $0.id, lastUsed: hosts.lastUsed($0), bytes: bytes[$0.id] ?? 0) }
+        let toPause = MemoryPolicy.overLimit(loaded, limit: 1)
+        let keep = pages[2]
+        check(toPause.count == 3 && !toPause.contains(keep.id), "over the limit: the 3 least recently used are chosen, the newest stays")
+        let expected = toPause.reduce(0) { $0 + (bytes[$1] ?? 0) }
+        for id in toPause { hosts.sleep(id) }
+        check(toPause.allSatisfy { hosts.sleeping.contains($0) && hosts.existingView($0) == nil }, "paused panes hold no view")
+
+        await pause(12)
+        guard let after = MemoryGuard.processTable() else { print("FAIL ps"); return false }
+        for pane in all where toPause.contains(pane.id) {
+            check(!alive(pids[pane.id] ?? -1, in: after), "\(pane.title): its process is gone after the pause")
+        }
+        let leftover = helpers.filter { alive($0, in: after) }
+        check(leftover.isEmpty, "terminal: the helpers Claude Code left behind were ended (\(leftover.count) left)")
+        check(alive(pids[keep.id] ?? -1, in: after) && hosts.existingView(keep.id) != nil, "the pane in use is still loaded")
+        let stillHeld = toPause.reduce(0) { $0 + after.treeBytes(root: pids[$1] ?? -1) }
+        print("     freed \(MemoryPolicy.format(expected - stillHeld)) of \(MemoryPolicy.format(expected)) held by the paused panes")
+        check(stillHeld == 0, "all the memory of the paused panes was returned to the system")
+
+        // And they come back.
+        hosts.wake(pages[0].id)
+        _ = hosts.view(for: pages[0])
+        await pause(5)
+        let again = hosts.processID(pages[0].id)
+        check(again != nil && again != pids[pages[0].id], "a paused page loads again in a new process")
+        hosts.terminateAll()
+        try? FileManager.default.removeItem(at: dir)
+        return ok
+    }
+}
