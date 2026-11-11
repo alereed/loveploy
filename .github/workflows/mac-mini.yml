@@ -1,0 +1,26 @@
+name: Mac mini memory test
+
+# Runs only by hand, on the Mac mini's own runner: builds Blender Play there and runs the
+# heavy memory self-test (real claude.ai pages, helpers holding 300 MB each), printing how
+# much memory the paused sessions gave back.
+on:
+  workflow_dispatch:
+
+jobs:
+  memory:
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mac
+        run: |
+          sw_vers
+          sysctl -n hw.memsize | awk '{printf "RAM: %.0f GB\n", $1/1073741824}'
+          memory_pressure | tail -1
+      - name: Build
+        run: swift build -c release
+      - name: Heavy memory self-test
+        run: '"$(swift build -c release --show-bin-path)/Loveploy" --selftest-memory heavy'
+      - name: Memory after
+        if: always()
+        run: memory_pressure | tail -1

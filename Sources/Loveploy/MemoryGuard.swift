@@ -277,13 +277,14 @@ struct MemoryView: View {
 enum MemorySelfTest {
     private static var hosts: PaneHosts?
 
-    static func run() {
+    /// `heavy`: real claude.ai pages and helpers that hold hundreds of MB, to see real numbers.
+    static func run(heavy: Bool = false) {
         Task { @MainActor in
-            let ok = await test()
+            let ok = await test(heavy: heavy)
             print(ok ? "SELFTEST PASS" : "SELFTEST FAIL")
             exit(ok ? 0 : 1)
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 120) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 240) {
             print("SELFTEST FAIL: timed out")
             exit(2)
         }
@@ -295,7 +296,7 @@ enum MemorySelfTest {
         try? await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000))
     }
 
-    private static func test() async -> Bool {
+    private static func test(heavy: Bool) async -> Bool {
         var ok = true
         func check(_ condition: Bool, _ what: String) {
             print(condition ? "PASS" : "FAIL", what)
@@ -306,20 +307,24 @@ enum MemorySelfTest {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("bp-selftest-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let fake = dir.appendingPathComponent("claude")
-        try? "#!/bin/sh\nsleep 600 &\nsleep 600 &\nexec sleep 600\n".write(to: fake, atomically: true, encoding: .utf8)
+        // In the heavy run each helper holds 300 MB, like a loaded MCP server or tool.
+        let helper = heavy ? "python3 -c 'import time; b = bytearray(300 * 1024 * 1024); time.sleep(600)'" : "sleep 600"
+        try? "#!/bin/sh\n\(helper) &\n\(helper) &\nexec sleep 600\n".write(to: fake, atomically: true, encoding: .utf8)
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
         setenv("PATH", dir.path + ":" + (ProcessInfo.processInfo.environment["PATH"] ?? "/usr/bin:/bin"), 1)
 
         let hosts = PaneHosts()
         self.hosts = hosts
         let terminal = SessionPane(kind: .local, title: "terminal", sessionID: "selftest", directory: dir.path)
-        let pages = (0..<3).map { SessionPane(kind: .cloud, title: "page \($0)", url: "data:text/html,<h1>Blender%20Play%20\($0)</h1>") }
+        let pages = (0..<(heavy ? 6 : 3)).map {
+            SessionPane(kind: .cloud, title: "page \($0)", url: heavy ? "https://claude.ai/login" : "data:text/html,<h1>Blender%20Play%20\($0)</h1>")
+        }
         let all = [terminal] + pages
         for pane in all {
             _ = hosts.view(for: pane)
             await pause(0.4)
         }
-        await pause(7)
+        await pause(heavy ? 20 : 7)
 
         guard let before = MemoryGuard.processTable() else { print("FAIL ps"); return false }
         var pids: [UUID: Int32] = [:]
@@ -340,8 +345,8 @@ enum MemorySelfTest {
         // The guard's own rule: keep 1 loaded, pause the ones used longest ago.
         let loaded = all.map { LoadedPane(id: $0.id, lastUsed: hosts.lastUsed($0), bytes: bytes[$0.id] ?? 0) }
         let toPause = MemoryPolicy.overLimit(loaded, limit: 1)
-        let keep = pages[2]
-        check(toPause.count == 3 && !toPause.contains(keep.id), "over the limit: the 3 least recently used are chosen, the newest stays")
+        let keep = pages[pages.count - 1]
+        check(toPause.count == all.count - 1 && !toPause.contains(keep.id), "over the limit: the \(all.count - 1) least recently used are chosen, the newest stays")
         let expected = toPause.reduce(0) { $0 + (bytes[$1] ?? 0) }
         for id in toPause { hosts.sleep(id) }
         check(toPause.allSatisfy { hosts.sleeping.contains($0) && hosts.existingView($0) == nil }, "paused panes hold no view")
