@@ -603,7 +603,20 @@ final class PaneHosts: ObservableObject {
             // memory with every pause. Note them now and make sure they're gone afterwards.
             let shell = terminal.process?.shellPid ?? 0
             terminal.terminate()
-            if shell > 0 { Self.reap(childrenOf: shell) }
+            if shell > 0 {
+                Self.reap(childrenOf: shell)
+                // Once its view is gone nobody collects the ended process, and it would stay
+                // in the system's process table as a zombie: collect it here.
+                DispatchQueue.global(qos: .utility).async {
+                    var status: Int32 = 0
+                    for _ in 0..<50 {
+                        if waitpid(shell, &status, WNOHANG) != 0 { return }   // collected, or already gone
+                        usleep(200_000)
+                    }
+                    kill(shell, SIGKILL)
+                    waitpid(shell, &status, 0)
+                }
+            }
         }
         if let web = views[id] as? WKWebView {
             // Letting go of the view normally ends its WebKit process; end it for sure, so a
