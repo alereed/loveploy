@@ -1,0 +1,24 @@
+name: Heavy memory test
+
+# By hand: the heavy memory self-test on a GitHub Mac (six real claude.ai pages, a terminal
+# whose helpers hold 300 MB each), printing how much memory the paused sessions gave back.
+on:
+  workflow_dispatch:
+
+jobs:
+  memory:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Mac
+        run: |
+          sysctl -n hw.memsize | awk '{printf "RAM: %.0f GB\n", $1/1073741824}'
+          memory_pressure | tail -1
+      - name: Build
+        run: swift build -c release
+      - name: Heavy memory self-test
+        run: '"$(swift build -c release --show-bin-path)/Loveploy" --selftest-memory heavy'
+      - name: Memory after
+        if: always()
+        run: memory_pressure | tail -1
