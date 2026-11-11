@@ -61,6 +61,16 @@ El panel de la barra de menú muestra solo lo de todos los días: tus grupos (un
 
 ## 🪶 Memoria
 
+**Guardián de memoria** (ventana de Blender Play → **Memoria**): cada sesión cargada es un grupo de procesos aparte (una página de claude.ai es un proceso de WebKit; una terminal es Claude Code más todos los servidores MCP y herramientas que arranca), así que lo que llena la RAM es cuántas hay cargadas a la vez. El guardián:
+
+- mide cada sesión con todo lo que cuelga de ella y lo muestra (en la barra de la sesión cuando pasa de 300 MB, y en la lista de Memoria);
+- mantiene cargadas como máximo **4** a la vez entre todos los grupos (ajustable): al pasar el tope pausa la que llevas más tiempo sin usar;
+- pausa una sesión que no estás usando si pasa de **3 GB** (ajustable);
+- cuando macOS avisa que queda poca memoria, pausa todas las que no tienes al frente (y si es crítico, también esas);
+- al pausar una terminal termina también los procesos que Claude Code dejó vivos, y al pausar una página termina su proceso de WebKit.
+
+Nunca pausa la sesión en la que escribes, una donde Claude está trabajando ni una con mensajes en cola. Todo vuelve donde iba con un clic.
+
 - Las horas y tokens se leen de las transcripciones sin cargar cada línea completa (pueden pesar megas), así que la memoria no crece con el historial.
 - Cada panel web dentro de Blender Play es un proceso de WebKit; al minimizar la ventana del grupo se liberan y vuelven al mostrarla.
 - **Enfocar** (encendido): las sesiones que tienes abiertas se reparten la ventana y las apagadas quedan como tiras de ~1 cm con su color y nombre. Un clic en una tira (o ⌃Tab) la prende; el botón de comprimir en su barra la apaga (se vuelve tira y se pausa para liberar memoria, salvo que Claude esté trabajando o tenga cola). Puedes tener varias prendidas a la vez. Se desactiva con el botón **Enfocar** de la barra del grupo.

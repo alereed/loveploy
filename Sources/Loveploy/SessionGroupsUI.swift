@@ -69,6 +69,9 @@ final class SessionGroups: ObservableObject {
         save()
     }
 
+    /// The open group windows.
+    var controllers: [GroupWindowController] { Array(windows.values) }
+
     /// A pane that's loaded in an open group window, with its view.
     func loaded(_ pane: UUID) -> (SessionPane, NSView)? {
         for controller in windows.values {
@@ -596,11 +599,50 @@ final class PaneHosts: ObservableObject {
 
     func drop(_ id: UUID) {
         if let terminal = views[id] as? LocalProcessTerminalView, terminal.process?.running == true {
+            // Claude Code starts MCP servers and tools; if any outlives it they'd pile up in
+            // memory with every pause. Note them now and make sure they're gone afterwards.
+            let shell = terminal.process?.shellPid ?? 0
             terminal.terminate()
+            if shell > 0 { Self.reap(childrenOf: shell) }
+        }
+        if let web = views[id] as? WKWebView {
+            // Letting go of the view normally ends its WebKit process; end it for sure, so a
+            // stray reference to the view can't keep hundreds of MB alive.
+            web.stopLoading()
+            web.configuration.userContentController.removeAllUserScripts()
+            for name in [PaneActivity.name, ClaudeMicBridge.name] {
+                web.configuration.userContentController.removeScriptMessageHandler(forName: name)
+            }
+            let kill = Selector(("_killWebContentProcessAndResetState"))
+            if web.responds(to: kill) { web.perform(kill) }
         }
         views[id]?.removeFromSuperview()
         views[id] = nil
         observers[id] = nil
+    }
+
+    /// Ends whatever a closed terminal's shell had started and is still running a few seconds
+    /// later (politely first, then for good).
+    static func reap(childrenOf shell: Int32) {
+        Task.detached(priority: .utility) {
+            guard let before = MemoryGuard.processTable() else { return }
+            let started = before.descendants(of: shell)
+            guard !started.isEmpty else { return }
+            try? await Task.sleep(nanoseconds: 4_000_000_000)
+            guard let after = MemoryGuard.processTable() else { return }
+            // Still alive, and now orphaned (their parent is gone) or still under the same tree.
+            // (The parent check keeps a process that merely got a recycled number out of it.)
+            let family = Set(started + [shell])
+            let left = started.filter { pid in
+                guard after.memoryKB[pid] != nil, let parent = after.parents[pid] else { return false }
+                return parent == 1 || family.contains(parent)
+            }
+            for pid in left { kill(pid, SIGTERM) }
+            guard !left.isEmpty else { return }
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            guard let final = MemoryGuard.processTable() else { return }
+            for pid in left where final.memoryKB[pid] != nil { kill(pid, SIGKILL) }
+        }
     }
 
     func terminateAll() {
@@ -623,6 +665,47 @@ final class PaneHosts: ObservableObject {
     /// The pane's terminal or web view, if it's loaded.
     func existingView(_ id: UUID) -> NSView? { views[id] }
 
+    /// Whether a loaded pane can be paused right now without losing anything: you're not typing
+    /// in it, it has no queued messages, and (terminals) the session can be resumed and Claude
+    /// isn't working.
+    func mayPause(_ pane: SessionPane, window: NSWindow?) -> Bool {
+        guard let view = views[pane.id], !sleeping.contains(pane.id) else { return false }
+        if let responder = window?.firstResponder as? NSView, window?.isKeyWindow == true,
+           responder === view || responder.isDescendant(of: view) { return false }
+        if MessageQueues.shared.hasPending(pane.id) { return false }
+        switch pane.kind {
+        case .cloud, .preview:
+            return true
+        case .local:
+            guard let terminal = view as? TrackedTerminal, terminal.process?.running == true,
+                  pane.sessionID != nil, !pane.startsNew else { return false }
+            let state = MessageQueues.shared.hookState(pane.id)
+            let working = state.map { $0 == .working || $0 == .needsYou } ?? (Date().timeIntervalSince(terminal.lastOutput) < 120)
+            return !working
+        case .chrome:
+            return false
+        }
+    }
+
+    /// When you last used a loaded pane.
+    func lastUsed(_ pane: SessionPane) -> Date {
+        if let terminal = views[pane.id] as? TrackedTerminal { return terminal.lastInput }
+        return PaneUse.last[pane.id] ?? .distantPast
+    }
+
+    /// The process behind a loaded pane: the terminal's shell (Claude Code and everything it
+    /// starts hang from it), or the page's WebKit process.
+    func processID(_ id: UUID) -> Int32? {
+        if let terminal = views[id] as? LocalProcessTerminalView {
+            guard terminal.process?.running == true, let pid = terminal.process?.shellPid, pid > 0 else { return nil }
+            return pid
+        }
+        if let web = views[id] as? WKWebView, web.responds(to: Selector(("_webProcessIdentifier"))) {
+            return (web.value(forKey: "_webProcessIdentifier") as? NSNumber)?.int32Value
+        }
+        return nil
+    }
+
     // MARK: Memory saver
 
     /// Marks panes as paused before anything loads (opening a group in saving mode).
@@ -641,6 +724,8 @@ final class PaneHosts: ObservableObject {
         guard sleeping.remove(id) != nil else { return }
         focused = id
         PaneUse.touch(id)
+        // One more loaded: if that's over the limit, the one used longest ago is paused.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { MemoryGuard.shared.enforce() }
         objectWillChange.send()
     }
 
@@ -1282,6 +1367,7 @@ struct PaneCell: View {
                 .foregroundStyle(.secondary)
             Text(pane.title).font(.system(size: 12, weight: .medium)).lineLimit(1)
             Text(Accounts.name(pane.account)).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+            PaneMemoryLabel(pane: pane.id)
             Spacer(minLength: 4)
             ProjectMenu(selected: pane.project, inherited: SessionGroups.shared.group(groupID)?.project, isPane: true,
                         cloud: pane.kind != .local, suggestedName: pane.title, folder: pane.directory) { project in

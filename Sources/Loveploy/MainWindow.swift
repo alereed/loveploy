@@ -33,6 +33,8 @@ struct CompactSections: View {
 
         Divider().padding(.horizontal, 14)
         weekLine
+        Divider().padding(.horizontal, 14)
+        MemoryLine()
     }
 
     /// Every account's week at once, one line each.
@@ -148,13 +150,14 @@ struct LovableLine: View {
 // MARK: - The Loveploy window
 
 enum MainSection: String, CaseIterable, Identifiable {
-    case home, groups, chrome, lovable, projects, usage
+    case home, groups, memory, chrome, lovable, projects, usage
     var id: String { rawValue }
 
     var label: String {
         switch self {
         case .home: return "Panel completo"
         case .groups: return "Grupos de sesiones"
+        case .memory: return "Memoria"
         case .chrome: return "Atajos de Chrome"
         case .lovable: return "Lovable"
         case .projects: return "Proyectos y cobro"
@@ -166,6 +169,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         switch self {
         case .home: return "menubar.rectangle"
         case .groups: return "rectangle.split.2x2"
+        case .memory: return "memorychip"
         case .chrome: return "macwindow.badge.plus"
         case .lovable: return "heart"
         case .projects: return "briefcase"
@@ -227,6 +231,8 @@ struct MainWindowView: View {
                 MenuView(inWindow: true)
             case .groups:
                 GroupsManagerView()
+            case .memory:
+                MemoryView()
             case .chrome:
                 ChromeShortcutsView()
             case .lovable:
@@ -364,5 +370,26 @@ struct MemorySaverSettings: View {
         .font(.system(size: 12))
         }
         .help("Los paneles web se pausan cuando llevas ese tiempo fuera de su ventana y sin usarlos; vuelven al regresar a la ventana. Las terminales se pausan cuando Claude Code lleva ese tiempo sin escribir ni recibir nada, y se reanudan con un clic. El panel en el que estás escribiendo nunca se pausa.")
+    }
+}
+
+/// "Memoria · 3 sesiones cargadas · 4.2 GB" in the short panel; opens the Memory view.
+struct MemoryLine: View {
+    @ObservedObject private var memory = MemoryGuard.shared
+
+    var body: some View {
+        HStack {
+            Image(systemName: "memorychip").font(.system(size: 11)).foregroundStyle(.secondary)
+            Text("Memoria").font(.system(size: 13))
+            Spacer()
+            Text("\(memory.paneBytes.count) cargada\(memory.paneBytes.count == 1 ? "" : "s") · \(MemoryPolicy.format(memory.totalBytes))")
+                .font(.system(size: 12)).monospacedDigit().foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .contentShape(Rectangle())
+        .modifier(HoverBackground(radius: 8))
+        .onTapGesture { MainWindow.show(.memory) }
+        .help("Cuánta memoria usa cada sesión; clic para ver y pausar")
     }
 }
