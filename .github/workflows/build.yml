@@ -45,3 +45,34 @@ jobs:
         with:
           name: BlenderPlay
           path: dist/BlenderPlay.zip
+
+  # The same app you download, on an Intel Mac with macOS 15 (like an iMac 2013 with OpenCore):
+  # it must carry the Intel code, open and stay open, and pass the memory self-test.
+  intel:
+    needs: macos
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: BlenderPlay
+      - name: Unpack
+        run: |
+          ditto -x -k BlenderPlay.zip .
+          uname -m
+          sw_vers
+          BIN="Blender Play.app/Contents/MacOS/Loveploy"
+          lipo -info "$BIN"
+          lipo -info "$BIN" | grep -q x86_64
+          otool -l -arch x86_64 "$BIN" | grep -A3 LC_BUILD_VERSION | grep minos
+      - name: Opens and stays open
+        run: |
+          rm -rf ~/Library/Logs/DiagnosticReports/Loveploy* 2>/dev/null || true
+          "Blender Play.app/Contents/MacOS/Loveploy" > app.log 2>&1 &
+          PID=$!
+          sleep 30
+          if kill -0 $PID 2>/dev/null; then echo "Sigue abierta tras 30 s (pid $PID)"; else echo "Se cerró"; cat app.log; exit 1; fi
+          ps -o pid,rss,command -p $PID
+          kill $PID
+          ls ~/Library/Logs/DiagnosticReports/ 2>/dev/null | grep -i loveploy && exit 1 || echo "Sin reportes de fallo"
+      - name: Memory self-test on Intel
+        run: '"Blender Play.app/Contents/MacOS/Loveploy" --selftest-memory'
