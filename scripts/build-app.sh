@@ -46,6 +46,15 @@ else
 fi
 
 (cd dist && rm -f BlenderPlay.zip && ditto -c -k --keepParent "Blender Play.app" BlenderPlay.zip)
+
+# A disk image too: GitHub zips every download, and a zip inside a zip only unpacks into
+# another zip. The .dmg opens to the app and an Applications shortcut to drag it onto.
+rm -rf dist/dmg dist/BlenderPlay.dmg
+mkdir -p dist/dmg
+cp -R "$APP" dist/dmg/
+ln -s /Applications dist/dmg/Applications
+hdiutil create -volname "Blender Play" -srcfolder dist/dmg -ov -format UDZO dist/BlenderPlay.dmg >/dev/null
+rm -rf dist/dmg
 echo "Listo: $APP"
 
 if [[ "${1:-}" == "--install" ]]; then

@@ -41,9 +41,15 @@ jobs:
       # check their processes are gone and their memory was returned.
       - name: Memory self-test
         run: '"dist/Blender Play.app/Contents/MacOS/Loveploy" --selftest-memory'
+      # The download: a .dmg (open it, drag Blender Play to Applications).
       - uses: actions/upload-artifact@v4
         with:
           name: BlenderPlay
+          path: dist/BlenderPlay.dmg
+      # The zip, for the Intel test below.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BlenderPlay-zip
           path: dist/BlenderPlay.zip
 
   # The same app you download, on an Intel Mac with macOS 15 (like an iMac 2013 with OpenCore):
@@ -57,7 +63,11 @@ jobs:
           name: BlenderPlay
       - name: Unpack
         run: |
-          ditto -x -k BlenderPlay.zip .
+          # The same disk image you download: mount it and copy the app out.
+          hdiutil attach BlenderPlay.dmg -mountpoint /tmp/bp -nobrowse -quiet
+          ls /tmp/bp
+          cp -R "/tmp/bp/Blender Play.app" .
+          hdiutil detach /tmp/bp -quiet
           uname -m
           sw_vers
           BIN="Blender Play.app/Contents/MacOS/Loveploy"
