@@ -89,12 +89,19 @@ public struct SessionPane: Codable, Identifiable, Hashable, Sendable {
     public var autoReload: Bool
     /// Preview: shown at a phone's width.
     public var mobile: Bool
+    /// claude.ai panes: the organization of the account it opens in (one sign-in can belong
+    /// to a team and a personal plan); nil = whichever the account has active.
+    public var org: String?
+    /// That organization's name, to show ("Blender", "Personal").
+    public var orgName: String?
 
     public init(
         id: UUID = UUID(), kind: Kind, title: String, account: String? = nil, sessionID: String? = nil,
         directory: String? = nil, configDir: String? = nil, url: String? = nil, startsNew: Bool = false, project: UUID? = nil,
-        autoReload: Bool = true, mobile: Bool = false
+        autoReload: Bool = true, mobile: Bool = false, org: String? = nil, orgName: String? = nil
     ) {
+        self.org = org
+        self.orgName = orgName
         self.autoReload = autoReload
         self.mobile = mobile
         self.startsNew = startsNew
@@ -115,10 +122,11 @@ public struct SessionPane: Codable, Identifiable, Hashable, Sendable {
     }
 
     /// A cloud pane from a pasted address. Only claude.ai pages.
-    public static func cloud(_ address: String, title: String?, account: String?, kind: Kind = .cloud) -> SessionPane? {
+    public static func cloud(_ address: String, title: String?, account: String?, kind: Kind = .cloud, org: ClaudeOrg? = nil) -> SessionPane? {
         guard let url = ClaudeLink.url(address) else { return nil }
         let name = title.map(ClaudeLink.cleanTitle).flatMap { $0.isEmpty ? nil : $0 } ?? Self.defaultTitle(for: url)
-        return SessionPane(kind: kind == .local ? .cloud : kind, title: name, account: account, url: url.absoluteString)
+        return SessionPane(kind: kind == .local ? .cloud : kind, title: name, account: account, url: url.absoluteString,
+                           org: org?.id, orgName: org?.name)
     }
 
     static func defaultTitle(for url: URL) -> String {
@@ -154,7 +162,7 @@ public struct SessionPane: Codable, Identifiable, Hashable, Sendable {
 
     static func quote(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
 
-    enum CodingKeys: String, CodingKey { case id, kind, title, account, sessionID, directory, configDir, url, startsNew, project, autoReload, mobile }
+    enum CodingKeys: String, CodingKey { case id, kind, title, account, sessionID, directory, configDir, url, startsNew, project, autoReload, mobile, org, orgName }
 
     // Lenient: a pane saved by another version still loads.
     public init(from decoder: Decoder) throws {
@@ -171,6 +179,8 @@ public struct SessionPane: Codable, Identifiable, Hashable, Sendable {
         project = try? c.decodeIfPresent(UUID.self, forKey: .project)
         autoReload = (try? c.decodeIfPresent(Bool.self, forKey: .autoReload)) ?? true
         mobile = (try? c.decodeIfPresent(Bool.self, forKey: .mobile)) ?? false
+        org = try? c.decodeIfPresent(String.self, forKey: .org)
+        orgName = try? c.decodeIfPresent(String.self, forKey: .orgName)
     }
 
     /// A preview pane for any web address (https, or http for local servers).

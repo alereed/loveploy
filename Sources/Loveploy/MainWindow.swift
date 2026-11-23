@@ -41,12 +41,12 @@ struct CompactSections: View {
     private var weekLine: some View {
         VStack(alignment: .leading, spacing: 5) {
             if engine.isOn(.chatLimits) {
-                let accounts = engine.profiles.filter { usage.limits[$0.id.uuidString] != nil }
-                if accounts.isEmpty {
+                let lines = usage.lines
+                if lines.isEmpty {
                     Text("Consultando claude.ai…").font(.system(size: 12)).foregroundStyle(.secondary)
                 }
-                ForEach(accounts) { profile in
-                    AccountWeekLine(profile: profile, snapshot: usage.limits[profile.id.uuidString]!)
+                ForEach(lines) { line in
+                    AccountWeekLine(profile: line.profile, name: line.name, snapshot: line.snapshot)
                 }
             } else {
                 HStack {
@@ -72,12 +72,13 @@ struct CompactSections: View {
 /// "● BLENDER ▓▓▓▓░░ 35% · 1 d 6 h" — one account's week in a single line.
 struct AccountWeekLine: View {
     let profile: Profile
+    var name: String? = nil
     let snapshot: ChatLimits.Snapshot
 
     var body: some View {
         HStack(spacing: 6) {
             Circle().fill(profile.tint).frame(width: 7, height: 7)
-            Text(profile.name).font(.system(size: 12)).lineLimit(1).frame(width: 78, alignment: .leading)
+            Text(name ?? profile.name).font(.system(size: 12)).lineLimit(1).frame(width: (name ?? "").contains(" · ") ? 118 : 78, alignment: .leading)
             if let week = snapshot.week {
                 let left = WeeklyLimit.left(week)
                 GeometryReader { proxy in
@@ -104,7 +105,7 @@ struct AccountWeekLine: View {
 
     private var help: String {
         guard let week = snapshot.week else { return WeeklyLimit.explain(snapshot.error) }
-        var text = "\(profile.name): queda \(WeeklyLimit.left(week))% de la semana"
+        var text = "\(name ?? profile.name): queda \(WeeklyLimit.left(week))% de la semana"
         if let resets = WeeklyLimit.resets(week.resetsAt) { text += ", se renueva \(resets)" }
         if let five = snapshot.fiveHour { text += ". Límite de 5 h: \(Int(five.percent.rounded()))% usado" }
         return text

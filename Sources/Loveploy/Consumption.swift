@@ -147,6 +147,28 @@ final class PaneActivity: NSObject, WKScriptMessageHandler {
     }
 }
 
+/// One account's limits, or one organization's when the account belongs to several (a team
+/// and the personal plan): "Ale · Blender", "Ale · Personal".
+struct LimitLine: Identifiable {
+    let id: String
+    let profile: Profile
+    let name: String
+    let snapshot: ChatLimits.Snapshot
+}
+
+extension Usage {
+    var lines: [LimitLine] {
+        Engine.shared.profiles.flatMap { profile -> [LimitLine] in
+            let key = profile.id.uuidString
+            let all = orgLimits[key] ?? limits[key].map { [$0] } ?? []
+            if all.count > 1 {
+                return all.map { LimitLine(id: key + "#" + ($0.orgID ?? ""), profile: profile, name: profile.name + " · " + ($0.org ?? "?"), snapshot: $0) }
+            }
+            return all.map { LimitLine(id: key, profile: profile, name: profile.name, snapshot: $0) }
+        }
+    }
+}
+
 /// The weekly limit closest to running out, for the menu bar.
 @MainActor
 enum WeeklyLimit {
@@ -155,8 +177,8 @@ enum WeeklyLimit {
     }
 
     static func tightest() -> (profile: Profile, limit: ChatLimits.Limit)? {
-        Engine.shared.profiles
-            .compactMap { profile in Usage.shared.limits[profile.id.uuidString]?.week.map { (profile, $0) } }
+        Usage.shared.lines
+            .compactMap { line in line.snapshot.week.map { (line.profile, $0) } }
             .max { $0.1.percent < $1.1.percent }
     }
 
@@ -191,8 +213,8 @@ enum WeeklyLimit {
     /// the lowest percentage.
     static func decorate(_ icon: NSImage?) -> NSImage? {
         guard showInMenuBar, let icon else { return icon }
-        let accounts = Engine.shared.profiles.compactMap { profile -> (Profile, Int)? in
-            Usage.shared.limits[profile.id.uuidString]?.week.map { (profile, left($0)) }
+        let accounts = Usage.shared.lines.compactMap { line -> (LimitLine, Int)? in
+            line.snapshot.week.map { (line, left($0)) }
         }
         guard let lowest = accounts.map(\.1).min() else { return icon }
         let shown = Array(accounts.prefix(4))
@@ -210,7 +232,8 @@ enum WeeklyLimit {
         let image = NSImage(size: size, flipped: false) { _ in
             icon.draw(in: NSRect(x: 0, y: (size.height - icon.size.height) / 2, width: icon.size.width, height: icon.size.height))
             var y = (size.height + stack) / 2 - barHeight
-            for (profile, left) in shown {
+            for (line, left) in shown {
+                let profile = line.profile
                 let track = NSRect(x: icon.size.width + gap, y: y, width: barWidth, height: barHeight)
                 ink.withAlphaComponent(0.25).setFill()
                 NSBezierPath(roundedRect: track, xRadius: barHeight / 2, yRadius: barHeight / 2).fill()
@@ -242,12 +265,12 @@ struct ConsumptionSection: View {
         if open {
             VStack(alignment: .leading, spacing: 4) {
                 if engine.isOn(.chatLimits) {
-                    let accounts = engine.profiles.filter { usage.limits[$0.id.uuidString] != nil }
-                    if accounts.isEmpty {
+                    let lines = usage.lines
+                    if lines.isEmpty {
                         Text("Consultando claude.ai…").font(.system(size: 12)).foregroundStyle(.secondary).padding(.horizontal, 8)
                     }
-                    ForEach(accounts) { profile in
-                        WeekRow(profile: profile, snapshot: usage.limits[profile.id.uuidString]!)
+                    ForEach(lines) { line in
+                        WeekRow(profile: line.profile, name: line.name, snapshot: line.snapshot)
                     }
                 } else {
                     PlainRow(title: "Mostrar cuánto queda de la semana…") { engine.toggle(.chatLimits) }
@@ -299,13 +322,14 @@ struct ConsumptionSection: View {
 /// One account: a wide bar of the week that's left, and the 5-hour window.
 struct WeekRow: View {
     let profile: Profile
+    var name: String? = nil
     let snapshot: ChatLimits.Snapshot
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 6) {
                 Circle().fill(profile.tint).frame(width: 8, height: 8)
-                Text(profile.name).font(.system(size: 13)).lineLimit(1)
+                Text(name ?? profile.name).font(.system(size: 13)).lineLimit(1)
                 Spacer()
                 if let week = snapshot.week {
                     Text("Queda \(WeeklyLimit.left(week))%").font(.system(size: 12, weight: .semibold)).monospacedDigit()

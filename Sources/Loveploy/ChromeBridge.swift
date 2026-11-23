@@ -269,11 +269,12 @@ final class CloudSessionLister: NSObject, WKNavigationDelegate {
     private var continuation: CheckedContinuation<[(url: String, title: String)], Never>?
     private var tries = 0
 
-    func sessions(account: String?) async -> [(url: String, title: String)] {
+    /// The sessions on claude.ai/code for an account, in one of its organizations (nil: the
+    /// one it has active).
+    func sessions(account: String?, org: String? = nil) async -> [(url: String, title: String)] {
+        await ClaudeOrgs.prepare(account: account, org: org)
         let configuration = WKWebViewConfiguration()
-        if let id = account.flatMap(UUID.init(uuidString:)) {
-            configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: id)
-        }
+        configuration.websiteDataStore = ClaudeOrgs.store(account: account, org: org)
         let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 1200, height: 900), configuration: configuration)
         web.customUserAgent = LovableWeb.userAgent
         web.navigationDelegate = self

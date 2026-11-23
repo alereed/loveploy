@@ -844,11 +844,8 @@ final class PaneHosts: ObservableObject {
     // claude.ai in the pane's account: each account has its own web storage, so its sign-in stays separate.
     private func makeWeb(_ pane: SessionPane) -> NSView {
         let configuration = WKWebViewConfiguration()
-        if let id = pane.account.flatMap(UUID.init(uuidString:)) {
-            configuration.websiteDataStore = WKWebsiteDataStore(forIdentifier: id)
-        } else {
-            configuration.websiteDataStore = .default()
-        }
+        // A pane in a given organization (team or personal) has its own storage set to it.
+        configuration.websiteDataStore = pane.kind == .preview ? ClaudeOrgs.baseStore(pane.account) : ClaudeOrgs.store(account: pane.account, org: pane.org)
         configuration.preferences.javaScriptCanOpenWindowsAutomatically = true
         let isPreview = pane.kind == .preview
         let mic = isPreview ? nil : ClaudeMicBridge.install(in: configuration, pane: pane.id)
@@ -866,7 +863,15 @@ final class PaneHosts: ObservableObject {
         web.uiDelegate = popups
         web.navigationDelegate = popups
         if let url = pane.url.flatMap(URL.init(string:)) {
-            web.load(URLRequest(url: url))
+            if pane.org != nil, pane.kind != .preview {
+                let account = pane.account, org = pane.org
+                Task { @MainActor [weak web] in
+                    await ClaudeOrgs.prepare(account: account, org: org)
+                    web?.load(URLRequest(url: url))
+                }
+            } else {
+                web.load(URLRequest(url: url))
+            }
         }
         return web
     }
@@ -1389,7 +1394,7 @@ struct PaneCell: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             Text(pane.title).font(.system(size: 12, weight: .medium)).lineLimit(1)
-            Text(Accounts.name(pane.account)).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+            Text(Accounts.name(pane.account) + (pane.orgName.map { " · " + $0 } ?? "")).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
             PaneMemoryLabel(pane: pane.id)
             Spacer(minLength: 4)
             ProjectMenu(selected: pane.project, inherited: SessionGroups.shared.group(groupID)?.project, isPane: true,
@@ -1594,7 +1599,8 @@ struct CloudSessionsList: View {
     @ObservedObject private var groups = SessionGroups.shared
     @ObservedObject private var engine = Engine.shared
     @State private var account: String?
-    @State private var found: [(url: String, title: String)] = []
+    @State private var found: [(url: String, title: String, org: ClaudeOrg?)] = []
+    @State private var orgs: [ClaudeOrg] = []
     @State private var loading = false
     @State private var loaded = false
     @State private var lister: CloudSessionLister?
@@ -1609,11 +1615,15 @@ struct CloudSessionsList: View {
                     ForEach(engine.profiles) { Text($0.name).tag(Optional($0.id.uuidString)) }
                 }
                 .labelsHidden().fixedSize()
-                Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }.help("Volver a buscar")
+                Button { Task { await load(refresh: true) } } label: { Image(systemName: "arrow.clockwise") }.help("Volver a buscar")
                 Spacer()
+                if orgs.count > 1 {
+                    Text("Organizaciones: " + orgs.map(\.name).joined(separator: " y ")).font(.caption).foregroundStyle(.secondary)
+                }
             }
             if loading {
-                ProgressView("Leyendo claude.ai/code…").frame(maxWidth: .infinity, maxHeight: .infinity)
+                ProgressView(orgs.count > 1 ? "Leyendo claude.ai/code de \(orgs.map(\.name).joined(separator: " y "))…" : "Leyendo claude.ai/code…")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if found.isEmpty {
                 VStack(spacing: 8) {
                     Text(loaded ? "No encontré sesiones. Si esta cuenta no ha iniciado sesión en claude.ai dentro de Blender Play, ábrela una vez:" : "")
@@ -1635,6 +1645,11 @@ struct CloudSessionsList: View {
                     HStack {
                         Image(systemName: "chevron.left.forwardslash.chevron.right").foregroundStyle(.secondary).frame(width: 18)
                         Text(item.title.isEmpty ? item.url : item.title).lineLimit(1)
+                        if let org = item.org, orgs.count > 1 {
+                            Text(org.name).font(.caption2).padding(.horizontal, 5).padding(.vertical, 1)
+                                .background(Capsule().fill((org.team ? Color.blue : Color.gray).opacity(0.18)))
+                                .help(org.team ? "Sesión del equipo \(org.name)" : "Sesión de tu plan personal")
+                        }
                         Spacer()
                         if group?.panes.contains(where: { $0.url.map { ClaudeLink.samePage($0, item.url) } ?? false }) == true {
                             Text("En el grupo").font(.caption).foregroundStyle(.secondary)
@@ -1657,21 +1672,32 @@ struct CloudSessionsList: View {
         .onChange(of: account) { Task { await load() } }
     }
 
-    private func add(_ item: (url: String, title: String), _ kind: SessionPane.Kind) {
-        guard let pane = SessionPane.cloud(item.url, title: item.title, account: account, kind: kind) else { return }
+    private func add(_ item: (url: String, title: String, org: ClaudeOrg?), _ kind: SessionPane.Kind) {
+        guard let pane = SessionPane.cloud(item.url, title: item.title, account: account, kind: kind, org: item.org) else { return }
         groups.add(pane, to: groupID)
     }
 
-    private func load() async {
+    /// Every organization of the account (team and personal), each read in its own storage,
+    /// so the list shows the sessions of both with a label.
+    private func load(refresh: Bool = false) async {
         guard !loading else { return }
         loading = true
-        let lister = CloudSessionLister()
-        self.lister = lister
-        found = await lister.sessions(account: account)
+        orgs = await ClaudeOrgs.orgs(account: account, refresh: refresh)
+        var all: [(url: String, title: String, org: ClaudeOrg?)] = []
+        for org in (orgs.count > 1 ? orgs.map(Optional.some) : [nil]) {
+            let lister = CloudSessionLister()
+            self.lister = lister
+            let items = await lister.sessions(account: account, org: org?.id)
+            for item in items where !all.contains(where: { ClaudeLink.samePage($0.url, item.url) }) {
+                all.append((item.url, item.title, org ?? orgs.first))
+            }
+        }
+        found = all
         self.lister = nil
         loaded = true
         loading = false
     }
+
 }
 
 /// A session found on this Mac and the account it belongs to.

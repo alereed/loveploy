@@ -2558,7 +2558,11 @@ final class UsageScan: @unchecked Sendable {
 // stays in memory, is only sent to claude.ai, and is never logged or written anywhere.
 enum ChatLimits {
     struct Limit: Equatable { let percent: Double; let resetsAt: Date? }
-    struct Snapshot: Equatable { var fiveHour: Limit?; var week: Limit?; var error: String? }
+    struct Snapshot: Equatable {
+        var fiveHour: Limit?; var week: Limit?; var error: String?
+        /// Blender Play: which organization of the account (team or personal) these are.
+        var org: String?; var orgID: String?
+    }
 
     nonisolated(unsafe) static var aesKey: Data?
 
@@ -2673,27 +2677,31 @@ enum ChatLimits {
     }
 
     static func fetch(folder: URL) async -> Snapshot {
-        guard let key = safeStorageKey() else { return Snapshot(error: "Keychain access refused") }
-        guard let cookie = sessionKey(in: folder, key: key) else { return Snapshot(error: "Not signed in") }
+        let all = await fetchAll(folder: folder)
+        return all.first { $0.week != nil || $0.fiveHour != nil } ?? all.first ?? Snapshot(error: "No limits")
+    }
+
+    /// Blender Play: one sign-in can belong to several organizations (a team and the personal
+    /// plan), each with its own limits: all of them that report limits, teams first.
+    static func fetchAll(folder: URL) async -> [Snapshot] {
+        guard let key = safeStorageKey() else { return [Snapshot(error: "Keychain access refused")] }
+        guard let cookie = sessionKey(in: folder, key: key) else { return [Snapshot(error: "Not signed in")] }
         do {
-            guard let orgs = try await get("/api/organizations", cookie) as? [[String: Any]], !orgs.isEmpty else {
-                return Snapshot(error: "No organization")
+            let orgs = OrgParser.parse(try await get("/api/organizations", cookie))
+            guard !orgs.isEmpty else { return [Snapshot(error: "No organization")] }
+            var found: [Snapshot] = []
+            for org in orgs {
+                guard var snapshot = try? parse(await get("/api/organizations/\(org.id)/usage", cookie)),
+                      snapshot.week != nil || snapshot.fiveHour != nil else { continue }
+                snapshot.org = org.name
+                snapshot.orgID = org.id
+                found.append(snapshot)
             }
-            // Loveploy: an account can belong to several organizations (personal and a team); use
-            // the first one that actually reports limits.
-            let chat = orgs.filter { ($0["capabilities"] as? [String])?.contains("chat") == true }
-            var first: Snapshot?
-            for org in (chat.isEmpty ? orgs : chat) {
-                guard let uuid = org["uuid"] as? String,
-                      let snapshot = try? parse(await get("/api/organizations/\(uuid)/usage", cookie)) else { continue }
-                if snapshot.week != nil || snapshot.fiveHour != nil { return snapshot }
-                first = first ?? snapshot
-            }
-            return first ?? Snapshot(error: "No limits")
+            return found.isEmpty ? [Snapshot(error: "No limits")] : found
         } catch {
             let code = (error as NSError).code
             Log.write("chat limits: claude.ai answered \(code)")
-            return Snapshot(error: code == 401 || code == 403 ? "claude.ai refused (\(code))" : "Couldn't reach claude.ai")
+            return [Snapshot(error: code == 401 || code == 403 ? "claude.ai refused (\(code))" : "Couldn't reach claude.ai")]
         }
     }
 }
@@ -2706,6 +2714,8 @@ final class Usage: ObservableObject {
 
     @Published private(set) var days: [String: [String: [String: UsageTotals]]] = [:]
     @Published private(set) var limits: [String: ChatLimits.Snapshot] = [:]   // profile id -> limits
+    /// Blender Play: profile id -> the limits of each of its organizations (team, personal).
+    @Published private(set) var orgLimits: [String: [ChatLimits.Snapshot]] = [:]
     @Published private(set) var scanning = false
     @Published private(set) var lastScan: Date?
     private var timer: Timer?
@@ -2772,12 +2782,21 @@ final class Usage: ObservableObject {
             let folders = e.profiles.map { ($0.id.uuidString, $0.folderURL) }
             Task.detached {
                 var out: [String: ChatLimits.Snapshot] = [:]
-                for (id, f) in folders { out[id] = await ChatLimits.fetch(folder: f) }
-                let snapshot = out
-                await MainActor.run { Usage.shared.limits = snapshot }
+                var perOrg: [String: [ChatLimits.Snapshot]] = [:]
+                for (id, f) in folders {
+                    let all = await ChatLimits.fetchAll(folder: f)
+                    perOrg[id] = all
+                    out[id] = all.first { $0.week != nil || $0.fiveHour != nil } ?? all.first
+                }
+                let snapshot = out, orgs = perOrg
+                await MainActor.run {
+                    Usage.shared.limits = snapshot
+                    Usage.shared.orgLimits = orgs
+                }
             }
         } else if !e.isOn(.chatLimits) && !limits.isEmpty {
             limits = [:]
+            orgLimits = [:]
             ChatLimits.aesKey = nil
         }
     }
@@ -4183,12 +4202,10 @@ struct UsageStatsView: View {
                 if !usage.limits.isEmpty {
                     Text("Chat limits").font(.headline)
                     Grid(alignment: .leading, horizontalSpacing: 22, verticalSpacing: 6) {
-                        ForEach(engine.profiles) { p in
-                            if let l = usage.limits[p.id.uuidString] {
-                                GridRow {
-                                    HStack { Circle().fill(p.tint).frame(width: 8, height: 8); Text(p.name) }
-                                    LimitText(snapshot: l)
-                                }
+                        ForEach(usage.lines) { line in
+                            GridRow {
+                                HStack { Circle().fill(line.profile.tint).frame(width: 8, height: 8); Text(line.name) }
+                                LimitText(snapshot: line.snapshot)
                             }
                         }
                     }
