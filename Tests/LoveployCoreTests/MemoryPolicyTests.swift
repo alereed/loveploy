@@ -36,6 +36,18 @@ final class MemoryPolicyTests: XCTestCase {
         XCTAssertEqual(MemoryPolicy.overLimit([c, d, a], limit: 1), [a.id], "pauses what it can even if that isn't enough")
     }
 
+    func testSwitchingScreensKeepsWhatYouWereUsing() {
+        let now = Date()
+        // Shown on your other screen: in use even though you clicked elsewhere.
+        XCTAssertTrue(MemoryPolicy.inUse(windowOnScreen: true, paneShown: true, lastUsed: .distantPast, now: now))
+        // Hidden (another Space or minimized) but used three minutes ago: still protected.
+        XCTAssertTrue(MemoryPolicy.inUse(windowOnScreen: false, paneShown: false, lastUsed: now.addingTimeInterval(-180), now: now))
+        // Hidden and untouched for half an hour: can be paused.
+        XCTAssertFalse(MemoryPolicy.inUse(windowOnScreen: false, paneShown: true, lastUsed: now.addingTimeInterval(-1800), now: now))
+        // Collapsed in focus mode and not used lately: can be paused even on screen.
+        XCTAssertFalse(MemoryPolicy.inUse(windowOnScreen: true, paneShown: false, lastUsed: now.addingTimeInterval(-1800), now: now))
+    }
+
     func testHeavyAndPressure() {
         let now = Date()
         let gb = 1_073_741_824

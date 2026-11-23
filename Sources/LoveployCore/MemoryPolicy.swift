@@ -90,6 +90,18 @@ public struct LoadedPane: Hashable, Sendable {
 }
 
 public enum MemoryPolicy {
+    /// How long a session you just used stays protected after you move to another screen,
+    /// window or app.
+    public static let recentGrace: TimeInterval = 10 * 60
+
+    /// A loaded session counts as in use (paused only as a last resort) when it's shown in a
+    /// window that's on a screen — any screen, not only the window you clicked last — or when
+    /// you used it in the last few minutes. Switching screens shouldn't pause what you were
+    /// just working on.
+    public static func inUse(windowOnScreen: Bool, paneShown: Bool, lastUsed: Date, now: Date = Date(), grace: TimeInterval = recentGrace) -> Bool {
+        (windowOnScreen && paneShown) || now.timeIntervalSince(lastUsed) < grace
+    }
+
     /// Which sessions to pause so that at most `limit` stay loaded: the ones you used
     /// longest ago first, never the ones in use or that can't be paused.
     public static func overLimit(_ panes: [LoadedPane], limit: Int) -> [UUID] {

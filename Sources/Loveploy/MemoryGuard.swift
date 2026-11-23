@@ -58,11 +58,15 @@ final class MemoryGuard: ObservableObject {
             let hosts = item.controller.hosts
             let window = item.controller.window
             let group = SessionGroups.shared.group(item.controller.groupID)
-            let front = window?.isKeyWindow == true
-            // In front of you: any pane of the window you're in, or just the open ones in focus mode.
-            let visible = group?.focusMode == true ? (hosts.expanded.contains(item.pane.id) || hosts.focused == item.pane.id) : true
-            return LoadedPane(id: item.pane.id, lastUsed: hosts.lastUsed(item.pane), bytes: paneBytes[item.pane.id] ?? 0,
-                              pausable: hosts.mayPause(item.pane, window: window), inUse: front && visible)
+            // On a screen: the window is showing on any display (not only the one you clicked
+            // last), so moving to your other screen doesn't count as leaving it.
+            let onScreen = window.map { $0.isVisible && !$0.isMiniaturized && $0.occlusionState.contains(.visible) } ?? false
+            // Shown: any pane of the window, or just the open ones in focus mode.
+            let shown = group?.focusMode == true ? (hosts.expanded.contains(item.pane.id) || hosts.focused == item.pane.id) : true
+            let lastUsed = hosts.lastUsed(item.pane)
+            return LoadedPane(id: item.pane.id, lastUsed: lastUsed, bytes: paneBytes[item.pane.id] ?? 0,
+                              pausable: hosts.mayPause(item.pane, window: window),
+                              inUse: MemoryPolicy.inUse(windowOnScreen: onScreen, paneShown: shown, lastUsed: lastUsed))
         }
     }
 
