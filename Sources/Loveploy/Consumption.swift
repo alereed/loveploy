@@ -22,8 +22,20 @@ final class DevClock: ObservableObject {
     private let file = JSONFile<UsageLedger>(named: "ledger.json")
     private let activityFile = JSONFile<ActivityLog>(named: "activity.json")
 
-    /// Transcripts and pane activity together.
-    var combined: UsageLedger { activity.merged(into: ledger) }
+    /// Time and tokens of your other Macs (from the cloud), added to this one's.
+    @Published private(set) var remote = UsageLedger()
+
+    /// Transcripts and pane activity together, plus your other Macs.
+    var combined: UsageLedger { activity.merged(into: ledger).merging(remote) }
+
+    /// What this Mac shares with the others: its sessions and its pane time.
+    var shareable: (ledger: UsageLedger, activity: ActivityLog) { (ledger.forSync, activity) }
+
+    func setRemote(_ ledger: UsageLedger) {
+        guard ledger != remote else { return }
+        remote = ledger
+        updateHours()
+    }
 
     func start() {
         guard timer == nil else { return }

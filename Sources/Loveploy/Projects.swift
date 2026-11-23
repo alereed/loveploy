@@ -19,6 +19,12 @@ final class Projects: ObservableObject {
         list = file.load() ?? []
     }
 
+    /// After the cloud brought the list from another Mac.
+    func reloadFromDisk() {
+        let loaded = file.load() ?? []
+        if loaded != list { list = loaded }
+    }
+
     func project(_ id: UUID?) -> BillingProject? {
         guard let id else { return nil }
         return list.first { $0.id == id }

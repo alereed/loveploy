@@ -49,6 +49,19 @@ enum Keychain {
         }
     }
 
+    /// The cloud sync code (Blender Play's other Macs use the same one).
+    static func loadSyncCode() -> String? {
+        load(account: "cloud-sync-code").map { String(decoding: $0, as: UTF8.self) }
+    }
+
+    static func saveSyncCode(_ code: String?) {
+        if let code {
+            save(Data(code.utf8), account: "cloud-sync-code")
+        } else {
+            delete(account: "cloud-sync-code")
+        }
+    }
+
     private static func query(account: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,

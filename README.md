@@ -103,6 +103,15 @@ Cada ventana de grupo, o cada sesión por separado, se puede asignar a un **proy
 
 Las sesiones de la nube también cuentan tiempo: un panel web suma cada bloque de 5 minutos en que escribiste, diste clic o Claude escribió algo nuevo, y una ventana de Chrome del grupo suma mientras la tienes al frente (sus tokens no se pueden leer desde la Mac). También cuentan las sesiones que corren dentro de las carpetas que le agregues al proyecto. Las sesiones nuevas que abres desde un grupo reciben su identificador desde el principio, así que se miden desde el primer minuto. En **Proyectos y cobro…** (sección Consumo del panel) eliges el periodo (este mes, mes pasado, 7 días, todo) y exportas un CSV para facturar.
 
+## ☁️ Nube: lo mismo en todas tus Mac
+
+En **Nube** (ventana de Blender Play) activas la sincronización en la primera Mac y copias su código (`BP1-…`); en la otra Mac lo pegas en *Usar el código de otra Mac*. Desde ahí quedan iguales:
+
+- grupos y su acomodo, proyectos y su tarifa, atajos de Chrome y preferencias;
+- el tiempo y los tokens de cada Mac se suman en Proyectos y cobro y en las horas de desarrollo.
+
+Al conectar una Mac nueva se juntan las listas de ambos lados (no se pierde nada). Todo se cifra en la Mac (AES-GCM) con una llave que sale del código y nunca se sube; el servidor solo guarda texto cifrado. El código vive en el Llavero; trátalo como contraseña. Las colas de mensajes no se sincronizan (dos Mac mandarían el mismo mensaje dos veces). La base solo expone tres funciones (`supabase/blenderplay_sync.sql`).
+
 ## 🚀 Lovable
 
 En el panel, la sección **Lovable** muestra cuántos proyectos faltan por publicar, el interruptor de Turbo y el botón para publicarlos. **Abrir proyectos…** abre la lista completa en su propia ventana. El ícono de la barra suma `♥N` cuando hay proyectos por publicar.

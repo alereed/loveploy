@@ -150,7 +150,7 @@ struct LovableLine: View {
 // MARK: - The Loveploy window
 
 enum MainSection: String, CaseIterable, Identifiable {
-    case home, groups, memory, chrome, lovable, projects, usage
+    case home, groups, memory, chrome, lovable, projects, usage, cloud
     var id: String { rawValue }
 
     var label: String {
@@ -162,6 +162,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         case .lovable: return "Lovable"
         case .projects: return "Proyectos y cobro"
         case .usage: return "Consumo detallado"
+        case .cloud: return "Nube"
         }
     }
 
@@ -174,6 +175,7 @@ enum MainSection: String, CaseIterable, Identifiable {
         case .lovable: return "heart"
         case .projects: return "briefcase"
         case .usage: return "chart.bar"
+        case .cloud: return "icloud"
         }
     }
 }
@@ -243,6 +245,8 @@ struct MainWindowView: View {
                 ProjectsView()
             case .usage:
                 UsageWindowView()
+            case .cloud:
+                CloudView()
             }
         }
         .frame(minWidth: 820, minHeight: 520)

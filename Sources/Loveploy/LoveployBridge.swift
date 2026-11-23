@@ -43,6 +43,7 @@ enum LoveployBridge {
         DevClock.shared.start()
         MessageQueues.shared.start()
         MemoryGuard.shared.start()
+        CloudSync.shared.start()
         Engine.shared.updateHotKeys()   // adds the groups' shortcuts
         SessionGroups.shared.openAtLaunch()
     }

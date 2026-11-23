@@ -379,6 +379,14 @@ final class ChromeShortcuts: ObservableObject {
 
     private init() { list = file.load() ?? [] }
 
+    /// After the cloud brought the shortcuts from another Mac.
+    func reloadFromDisk() {
+        let loaded = file.load() ?? []
+        guard loaded != list else { return }
+        list = loaded
+        Engine.shared.updateHotKeys()
+    }
+
     func add(name: String, url: String) {
         list.append(ChromeShortcut(name: ClaudeLink.cleanTitle(name).isEmpty ? url : ClaudeLink.cleanTitle(name), url: url,
                                    shortcut: GroupShortcut.suggestion(taken: taken)))

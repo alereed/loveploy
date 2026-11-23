@@ -41,6 +41,9 @@ jobs:
       # check their processes are gone and their memory was returned.
       - name: Memory self-test
         run: '"dist/Blender Play.app/Contents/MacOS/Loveploy" --selftest-memory'
+      # Saves, reads back and deletes an encrypted copy in the cloud with a throwaway code.
+      - name: Cloud self-test
+        run: '"dist/Blender Play.app/Contents/MacOS/Loveploy" --selftest-cloud'
       # The download: a .dmg (open it, drag Blender Play to Applications).
       - uses: actions/upload-artifact@v4
         with:

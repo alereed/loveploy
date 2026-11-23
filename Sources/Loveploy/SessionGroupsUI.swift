@@ -32,6 +32,16 @@ final class SessionGroups: ObservableObject {
     }
 
     func group(_ id: UUID) -> SessionGroup? { groups.first { $0.id == id } }
+
+    /// After the cloud brought the groups from another Mac. Windows that are open keep
+    /// running; their titles follow the new names.
+    func reloadFromDisk() {
+        let loaded = store.load()
+        guard loaded != groups else { return }
+        groups = loaded
+        for group in loaded { windows[group.id]?.window?.title = group.name }
+        Engine.shared.updateHotKeys()
+    }
     func isOpen(_ id: UUID) -> Bool { openIDs.contains(id) }
 
     @discardableResult
