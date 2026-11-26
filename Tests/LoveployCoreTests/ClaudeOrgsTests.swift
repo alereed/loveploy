@@ -19,6 +19,14 @@ final class ClaudeOrgsTests: XCTestCase {
         XCTAssertEqual(ClaudeOrg.parse(["nope"]), [])
     }
 
+    func testClaudeAppLinksAreSessions() throws {
+        let link = "https://claude.ai/code/cshk_01ABCDEFexampleLinkForTests"
+        XCTAssertTrue(ClaudeLink.isCodeSession(link))
+        XCTAssertTrue(ClaudeLink.isCodeSession("https://claude.ai/code/session_abc"))
+        XCTAssertFalse(ClaudeLink.isCodeSession("https://claude.ai/code"))
+        XCTAssertEqual(try XCTUnwrap(SessionPane.cloud(link, title: nil, account: nil)).title, "Sesión 01ABCD")
+    }
+
     func testStoreIDIsStableAndSeparate() {
         let a = ClaudeOrg.storeID(account: "acct", org: "t-1")
         XCTAssertEqual(a, ClaudeOrg.storeID(account: "acct", org: "t-1"))

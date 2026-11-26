@@ -99,6 +99,17 @@ final class SessionGroups: ObservableObject {
 
     func paneTitle(_ id: UUID) -> String? { pane(id)?.title }
 
+    /// Puts a claude.ai pane in another organization of its account (team or personal) and,
+    /// unless the page is already there, reopens it in that organization.
+    func setOrg(_ id: UUID, to org: ClaudeOrg, reload: Bool = true) {
+        guard let group = groups.first(where: { $0.panes.contains { $0.id == id } }),
+              var pane = group.panes.first(where: { $0.id == id }), pane.org != org.id else { return }
+        pane.org = org.id
+        pane.orgName = org.name
+        change(group.id) { $0.replace(pane) }
+        if reload { windows[group.id]?.hosts.reload(pane) }
+    }
+
     /// The pane you're typing in, in the group window in front.
     func focusedPane() -> (UUID, NSView)? {
         for controller in windows.values {
@@ -850,6 +861,7 @@ final class PaneHosts: ObservableObject {
         let isPreview = pane.kind == .preview
         let mic = isPreview ? nil : ClaudeMicBridge.install(in: configuration, pane: pane.id)
         if !isPreview { PaneActivity.install(in: configuration, pane: pane.id) }
+        if pane.kind == .cloud { OrgWatcher.install(in: configuration, pane: pane.id) }
         PaneUse.touch(pane.id)
         let web = WKWebView(frame: NSRect(x: 0, y: 0, width: 640, height: 420), configuration: configuration)
         mic?.web = web
@@ -1394,7 +1406,8 @@ struct PaneCell: View {
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             Text(pane.title).font(.system(size: 12, weight: .medium)).lineLimit(1)
-            Text(Accounts.name(pane.account) + (pane.orgName.map { " · " + $0 } ?? "")).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+            Text(Accounts.name(pane.account)).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+            if pane.kind == .cloud { PaneOrgMenu(pane: pane) }
             PaneMemoryLabel(pane: pane.id)
             Spacer(minLength: 4)
             ProjectMenu(selected: pane.project, inherited: SessionGroups.shared.group(groupID)?.project, isPane: true,
@@ -1725,6 +1738,8 @@ struct AddPaneView: View {
     @State private var cloudURL = ""
     @State private var cloudTitle = ""
     @State private var cloudError: String?
+    @State private var cloudOrgs: [ClaudeOrg] = []
+    @State private var cloudOrg: String?
 
     private var group: SessionGroup? { groups.group(groupID) }
     private var full: Bool { group?.isFull ?? true }
@@ -1957,6 +1972,17 @@ struct AddPaneView: View {
                 Text("Cuenta").frame(width: 70, alignment: .leading)
                 accountPicker($cloudAccount)
             }
+            if cloudOrgs.count > 1 {
+                HStack {
+                    Text("Organización").frame(width: 70, alignment: .leading)
+                    Picker("", selection: $cloudOrg) {
+                        Text("Detectar sola").tag(String?.none)
+                        ForEach(cloudOrgs) { org in Text(org.name + (org.team ? " (equipo)" : "")).tag(Optional(org.id)) }
+                    }
+                    .labelsHidden().fixedSize()
+                    Text("Si eliges mal, el panel se cambia solo a la correcta.").font(.caption).foregroundStyle(.secondary)
+                }
+            }
             HStack {
                 Text("Dirección").frame(width: 70, alignment: .leading)
                 TextField("https://claude.ai/code/session_…", text: $cloudURL).textFieldStyle(.roundedBorder)
@@ -1988,10 +2014,15 @@ struct AddPaneView: View {
                 Button("Cerrar") { done() }.keyboardShortcut(.cancelAction)
             }
         }
+        .task(id: cloudAccount) {
+            cloudOrgs = await ClaudeOrgs.orgs(account: cloudAccount)
+            if let chosen = cloudOrg, !cloudOrgs.contains(where: { $0.id == chosen }) { cloudOrg = nil }
+        }
     }
 
     private func addCloud(_ address: String, title: String) {
-        guard let pane = SessionPane.cloud(address, title: title, account: cloudAccount) else {
+        let org = cloudOrgs.first { $0.id == cloudOrg }
+        guard let pane = SessionPane.cloud(address, title: title, account: cloudAccount, org: org) else {
             cloudError = "Pon una dirección https de claude.ai."
             return
         }

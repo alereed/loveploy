@@ -132,6 +132,7 @@ public struct SessionPane: Codable, Identifiable, Hashable, Sendable {
     static func defaultTitle(for url: URL) -> String {
         let last = url.lastPathComponent
         if last.hasPrefix("session_") { return "Sesión " + last.dropFirst("session_".count).prefix(6) }
+        if last.hasPrefix("cshk_") { return "Sesión " + last.dropFirst("cshk_".count).prefix(6) }
         return last.isEmpty || last == "code" ? "Claude Code" : last
     }
 
@@ -206,9 +207,11 @@ public enum ClaudeLink {
         return url
     }
 
-    /// A Claude Code session (claude.ai/code/session_…).
+    /// A Claude Code session (claude.ai/code/session_…, or the claude.ai/code/cshk_… links the
+    /// Claude app copies).
     public static func isCodeSession(_ address: String) -> Bool {
-        url(address)?.path.contains("/code/session_") ?? false
+        guard let path = url(address)?.path else { return false }
+        return path.contains("/code/session_") || path.contains("/code/cshk_")
     }
 
     /// Same page: same host and path, whatever the query or fragment.
